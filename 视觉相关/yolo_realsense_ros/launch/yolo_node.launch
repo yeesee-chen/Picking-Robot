@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<launch>
+  <node
+      pkg="yolo_realsense_ros"
+      type="yolo_node4.py"
+      name="yolo_node"
+      output="screen">
+
+    <!-- 可调参数 -->
+    <param name="~confidence_threshold"     value="0.5"/>
+    <param name="~saturation_threshold"     value="40"/>
+    <param name="~value_threshold"          value="40"/>
+    <param name="~depth_filter_size"        value="5"/>
+    
+  </node>
+</launch>
