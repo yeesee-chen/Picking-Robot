@@ -70,8 +70,8 @@ class OptimizedYoloNode:
         """初始化ROS参数"""
         # 模型相关参数
         # 参数需要修改为自定义的文件夹路径
-        self.yolov5_path = rospy.get_param('~yolov5_path', '/home/nvidia/chu_ws/src/yolo_realsense_ros/yolov5')
-        self.weight_path = rospy.get_param('~weight_path', '/home/nvidia/chu_ws/src/yolo_realsense_ros/weights/best.pt')
+        self.yolov5_path = rospy.get_param('~yolov5_path', '/home/nvidia/ego-planner/src/yolo_realsense_ros/yolov5')
+        self.weight_path = rospy.get_param('~weight_path', '/home/nvidia/ego-planner/src/yolo_realsense_ros/weights/best.pt')
         self.confidence_threshold = rospy.get_param('~confidence_threshold', 0.5)
 
         # 深度相关参数
@@ -387,22 +387,37 @@ class OptimizedYoloNode:
             y_cam = (cy - self.cy) * z / self.fy
 
             # 获取当前观测位坐标，如果有/ggwp消息就接收，如果没有默认1
-            if self.current_region in self.observation_positions:
-                x_init, y_init, z_init = self.observation_positions[self.current_region]
-            else:
-                x_init, y_init, z_init = self.observation_positions[1]
+            # if self.current_region in self.observation_positions:
+            #     x_init, y_init, z_init = self.observation_positions[self.current_region]
+            # else:
+            #     x_init, y_init, z_init = self.observation_positions[2]
+
+            x_init, y_init, z_init = self.observation_positions[2]
+            flag = 1
 
             # 位置1
-            if self.current_region == 1 :
+            if flag == 1 :
                 # 相机坐标系转机械臂基坐标系
                 x_base = x_cam + x_init
-                y_base = y_init - y_cam
+                y_base = y_init + y_cam
                 z_base = -0.018
+                rho = np.sqrt(x_base ** 2 + y_base ** 2)
+                rho = rho + 0.05
+                phi = np.arctan2(y_base, x_base)
+                phi_deg = np.degrees(phi)
+                phi_deg = 180 + phi_deg - 7
+
             # 位置2
-            if self.current_region == 2 :
+            if flag == 2 :
                 x_base = x_init - x_cam
                 y_base = y_init + y_cam
                 z_base = -0.018
+                rho = np.sqrt(x_base ** 2 + y_base ** 2)
+                rho = rho + 0.05
+                phi = np.arctan2(y_base, x_base)
+                phi_deg = np.degrees(phi)
+                phi_deg = phi_deg + 8.0
+
 
             # # 处理位置3、4的相机旋转
             # if self.current_region in (3, 4) :
@@ -411,9 +426,7 @@ class OptimizedYoloNode:
             #     z_cam = z_cam * 0.966
 
             # 转换为圆柱坐标系
-            rho = np.sqrt(x_base ** 2 + y_base ** 2)
-            phi = np.arctan2(y_base, x_base)
-            phi_deg = np.degrees(phi)
+            
 
             return rho, phi_deg, z_base
 
