@@ -43,7 +43,7 @@ class OptimizedYoloNode:
         self.camera_ready = False
 
         # 小车位置和预设观测位坐标
-        self.current_position = 1
+        self.current_region = 1
         self.observation_positions = {
             1: (0.008, 0.272, 0.11),
             2: (-0.008, -0.262, 0.11),
@@ -92,16 +92,22 @@ class OptimizedYoloNode:
         self.stability_frames = rospy.get_param('~stability_frames', 5)  # 需要连续稳定的帧数
         self.stability_threshold = rospy.get_param('~stability_threshold', 0.05)  # 稳定性阈值（米）
         self.duplicate_threshold = rospy.get_param('~duplicate_threshold', 0.05)  # 重复坐标判断阈值（米）
-        self.pause_duration = rospy.get_param('~pause_duration', 3.0)  # 暂停时长（秒）
+        self.pause_duration = rospy.get_param('~pause_duration', 2.0)  # 暂停时长（秒）
 
-        # 水果类别和成熟条件映射
+        # 水果类别与标签id映射
         self.fruit_maturity_mapping = {
-            0: {'name': 'jiao', 'mature_hue_ranges': [(0, 10), (160, 180)]},
-            1: {'name': 'xihongshi', 'mature_hue_ranges': [(0, 10), (160, 180)]},
-            2: {'name': 'li', 'mature_hue_ranges': [(11, 35)]},
-            3: {'name': 'nangua', 'mature_hue_ranges': [(10, 30)]},
-            4: {'name': 'pingguo', 'mature_hue_ranges': [(0, 10), (160, 180)]},
-            5: {'name': 'yangcong', 'mature_hue_ranges': [(125, 180)]}
+            0: {'name': 'onion_0'},
+            1: {'name': 'onion_1'},
+            2: {'name': 'pumpkin_0'},
+            3: {'name': 'pumpkin_1'},
+            4: {'name': 'tomato_0'},
+            5: {'name': 'tomato_1'},
+            6: {'name': 'pepper_0'},
+            7: {'name': 'pepper_1'},
+            8: {'name': 'apple_0'},
+            9: {'name': 'apple_1'},
+            10: {'name': 'pear_1'},
+            11: {'name': 'pear_0'}
         }
 
     def _init_model(self):
@@ -125,9 +131,8 @@ class OptimizedYoloNode:
         """初始化ROS发布者"""
         # 新的发布者：使用标准消息类型
         # point是标准类型geometry_msgs中的一种坐标点类型
-        self.position_pub = rospy.Publisher('/fruit_position', Point, queue_size=10)
-        self.class_pub = rospy.Publisher('/fruit_class', String, queue_size=10)
-        self.ripeness_pub = rospy.Publisher('/fruit_ripeness', Bool, queue_size=10)
+        self.point_pub = rospy.Publisher('/fruit_point', Point, queue_size=10)
+        self.class_ripeness_pub = rospy.Publisher('/fruit_class_ripeness', String, queue_size=10)
 
         # 可视化图像发布者
         self.image_vis_pub = rospy.Publisher('/yolov5/vis', Image, queue_size=10)
@@ -151,10 +156,10 @@ class OptimizedYoloNode:
         """小车位置回调函数"""
         position = msg.data
         if position in range(1, 7):
-            self.current_position = position
+            self.current_region = position
             rospy.loginfo(f"更新小车位置: 位置 {position}")
         else:
-            rospy.logwarn(f"收到无效位置: {position}，保持当前位置 {self.current_position}")
+            rospy.logwarn(f"收到无效位置: {position}，保持当前位置 {self.current_region}")
 
     def _camera_info_callback(self, msg):
         """相机参数回调函数"""
@@ -201,9 +206,7 @@ class OptimizedYoloNode:
             bgr_img, depth_img = self._validate_and_resize_images(bgr_img, depth_img)
             if bgr_img is None or depth_img is None:
                 return
-
             rgb_img = cv2.resize(rgb_img, (self.expected_width, self.expected_height))
-
             # 执行检测和发布
             self._detect_and_publish(rgb_img, bgr_img, depth_img, color_msg.header)
 
@@ -262,20 +265,13 @@ class OptimizedYoloNode:
                 return
 
             # 获取类别名称和成熟度
-            if cls_id in self.fruit_maturity_mapping:
-                class_name = self.fruit_maturity_mapping[cls_id]['name']
-            else:
-                class_name = f"unknown_{cls_id}"
-
-            is_mature = self._check_maturity(bgr_img, (int(x1), int(y1), int(x2), int(y2)), cls_id)
+            class_name = self.fruit_maturity_mapping[cls_id]['name']
 
             # 创建检测结果
             # 将结果作为一个列表
             detection_result = {
                 'position': world_coords,
-                'class_name': class_name,
-                'is_mature': is_mature,
-                'confidence': conf,
+                'class_ripeness': class_name,
                 'bbox': (x1, y1, x2, y2)
             }
 
@@ -291,7 +287,7 @@ class OptimizedYoloNode:
                     self.last_publish_time = time.time()
                     self.is_in_pause = True
 
-                    rospy.loginfo(f"发布水果检测结果: 位置{world_coords}, 类别: {class_name}, 成熟: {is_mature}")
+                    rospy.loginfo(f"发布水果检测结果: 位置{world_coords}, 类别: {class_name}")
                     rospy.loginfo(f"进入{self.pause_duration}秒暂停期...")
                 else:
                     rospy.loginfo("检测到重复坐标，跳过发布")
@@ -310,7 +306,6 @@ class OptimizedYoloNode:
         """找到最左侧的水果（x坐标最小）"""
         if len(detections) == 0:
             return None
-
         # 按x1坐标排序，选择最左侧的
         leftmost_idx = np.argmin(detections[:, 0])
         return detections[leftmost_idx]
@@ -319,28 +314,22 @@ class OptimizedYoloNode:
         """检查检测结果的稳定性"""
         # 添加到稳定性缓冲区
         self.stability_buffer.append(detection_result)
-
         # 如果缓冲区未满，不够稳定
         if len(self.stability_buffer) < self.stability_frames:
             return False
-
         # 检查最近几帧的坐标是否都在阈值范围内
         positions = [result['position'] for result in self.stability_buffer]
-
         # 计算坐标的标准差
         rho_values = [pos[0] for pos in positions]
         phi_values = [pos[1] for pos in positions]
         z_values = [pos[2] for pos in positions]
-
         rho_std = np.std(rho_values)
         phi_std = np.std(phi_values)
         z_std = np.std(z_values)
-
         # 如果所有坐标分量的标准差都小于阈值，则认为稳定
         is_stable = (rho_std < self.stability_threshold and
                      phi_std < self.stability_threshold and
                      z_std < self.stability_threshold)
-
         return is_stable
 
     def _is_duplicate_coordinate(self, current_coord):
@@ -358,69 +347,23 @@ class OptimizedYoloNode:
 
     def _publish_detection_result(self, detection_result):
         """发布检测结果"""
-        try:
-            # 当检测区域为12，56，即检测区域为地面，发布类别+成熟度+（只有成熟时才发布，否则为0）坐标
-            if self.current_position == [1, 2, 5, 6]:
+        # 发布位置
+        position_msg = Point()
+        position_msg.x = detection_result['position'][0]  # rho
+        position_msg.y = detection_result['position'][1]  # phi
+        position_msg.z = detection_result['position'][2]  # z
+        self.point_pub.publish(position_msg)
 
-                # 发布位置
-                # position_msg = Point()
-                # position_msg.x = detection_result['position'][0]  # rho
-                # position_msg.y = detection_result['position'][1]  # phi
-                # position_msg.z = detection_result['position'][2]  # z
-                # self.position_pub.publish(position_msg)
-
-                # 发布类别
-                class_msg = String()
-                class_msg.data = detection_result['class_name']
-                self.class_pub.publish(class_msg)
-
-                # 发布成熟度
-                ripeness_msg = Bool()
-                ripeness_msg.data = detection_result['is_mature']
-                self.ripeness_pub.publish(ripeness_msg)
-
-                if detection_result['is_mature']:
-                    position_msg = Point()
-                    position_msg.x = detection_result['position'][0]  # rho
-                    position_msg.y = detection_result['position'][1]  # phi
-                    position_msg.z = detection_result['position'][2]  # z
-                    self.position_pub.publish(position_msg)
-                else:
-                    position_msg = Point()
-                    position_msg.x = 0  # rho
-                    position_msg.y = 0  # phi
-                    position_msg.z = 0  # z
-                    self.position_pub.publish(position_msg)
-
-            elif self.current_position == [3, 4]:
-                # 当区域为3，4即为树上时，发布成熟的坐标（需要夹取的坐标）
-                if detection_result['is_mature']:
-                    position_msg = Point()
-                    position_msg.x = detection_result['position'][0]  # rho
-                    position_msg.y = detection_result['position'][1]  # phi
-                    position_msg.z = detection_result['position'][2]  # z
-                    self.position_pub.publish(position_msg)
-                else:
-                    position_msg = Point()
-                    position_msg.x = 0  # rho
-                    position_msg.y = 0  # phi
-                    position_msg.z = 0  # z
-                    self.position_pub.publish(position_msg)
-
-                class_msg = String()
-                class_msg.data = ""
-                self.class_pub.publish(class_msg)
-
-                # 发布成熟度
-                ripeness_msg = Bool()
-                ripeness_msg.data = None
-                self.ripeness_pub.publish(ripeness_msg)
-
-        except Exception as e:
-            rospy.logerr(f"发布检测结果失败: {str(e)}")
+        # 发布类别
+        class_ripeness_msg = String()
+        class_ripeness_msg.data = detection_result['class_ripeness']
+        self.class_ripeness_pub.publish(class_ripeness_msg)
 
     def _calculate_3d_coordinates(self, cx, cy, depth_img):
         """计算3D世界坐标并转换到机械臂基坐标系"""
+        x_base = None
+        y_base = None
+        z_base = None
         try:
             # 提取深度区域
             y1 = max(0, cy - self.depth_filter_size // 2)
@@ -442,22 +385,29 @@ class OptimizedYoloNode:
             x_cam = (cx - self.cx) * z / self.fx
             y_cam = (cy - self.cy) * z / self.fy
 
-            # 获取当前观测位坐标
-            if self.current_position in self.observation_positions:
-                x_init, y_init, z_init = self.observation_positions[self.current_position]
+            # 获取当前观测位坐标，如果有/ggwp消息就接收，如果没有默认1
+            if self.current_region in self.observation_positions:
+                x_init, y_init, z_init = self.observation_positions[self.current_region]
             else:
                 x_init, y_init, z_init = self.observation_positions[1]
 
-            # 处理位置3、4的相机旋转
-            if self.current_position == [3, 4] :
-                x_cam = x_cam
-                y_cam = y_cam * 0.966
-                z_cam = z_cam * 0.966
+            # 位置1
+            if self.current_region == 1 :
+                # 相机坐标系转机械臂基坐标系
+                x_base = x_cam + x_init
+                y_base = y_init - y_cam
+                z_base = -0.018
+            # 位置2
+            if self.current_region == 2 :
+                x_base = x_init - x_cam
+                y_base = y_init + y_cam
+                z_base = -0.018
 
-            # 相机坐标系转机械臂基坐标系
-            x_base = x_cam + x_init
-            y_base = -(z_cam + y_init)
-            z_base = y_cam + z_init
+            # # 处理位置3、4的相机旋转
+            # if self.current_region in (3, 4) :
+            #     x_cam = x_cam
+            #     y_cam = y_cam * 0.966
+            #     z_cam = z_cam * 0.966
 
             # 转换为圆柱坐标系
             rho = np.sqrt(x_base ** 2 + y_base ** 2)
@@ -470,43 +420,6 @@ class OptimizedYoloNode:
             rospy.logerr(f"3D坐标计算失败: {str(e)}")
             return None
 
-    def _check_maturity(self, bgr_img, bbox, class_id):
-        """判断水果成熟度"""
-        try:
-            x1, y1, x2, y2 = bbox
-            roi = bgr_img[y1:y2, x1:x2]
-
-            if roi.size == 0:
-                return False
-
-            hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-            h_channel = hsv_roi[:, :, 0]
-            s_channel = hsv_roi[:, :, 1]
-            v_channel = hsv_roi[:, :, 2]
-
-            valid_mask = (s_channel > self.saturation_threshold) & (v_channel > self.value_threshold)
-            valid_hues = h_channel[valid_mask]
-
-            if len(valid_hues) == 0:
-                return False
-
-            median_hue = np.median(valid_hues)
-
-            if class_id not in self.fruit_maturity_mapping:
-                return False
-
-            mature_ranges = self.fruit_maturity_mapping[class_id]['mature_hue_ranges']
-
-            for hue_min, hue_max in mature_ranges:
-                if hue_min <= median_hue <= hue_max:
-                    return True
-
-            return False
-
-        except Exception as e:
-            rospy.logerr(f"成熟度判断失败: {str(e)}")
-            return False
-
     def _publish_visualization(self, bgr_img, detections, header, status, detection_result=None):
         """发布可视化图像"""
         try:
@@ -518,22 +431,17 @@ class OptimizedYoloNode:
                 x1, y1, x2, y2, conf, cls_id = det
 
                 # 绘制边界框
-                color = (0, 255, 0) if detection_result['is_mature'] else (0, 0, 255)
+                color = (0, 255, 0)
                 cv2.rectangle(vis_img, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
 
                 # 添加标签
-                status_char = "M" if detection_result['is_mature'] else "I"
-                label = f"{detection_result['class_name']} {status_char} {conf:.2f}"
+                label = f"{detection_result['class_ripeness']}"
                 text_y = int(y1) - 10 if int(y1) > 25 else int(y2) + 20
                 cv2.putText(vis_img, label, (int(x1), text_y), self.font, 0.5, color, 1)
 
                 # 绘制坐标信息
                 coord_text = f"Pos: ({detection_result['position'][0]:.2f}, {detection_result['position'][1]:.2f}, {detection_result['position'][2]:.2f})"
                 cv2.putText(vis_img, coord_text, (10, vis_img.shape[0] - 60), self.font, 0.5, (255, 255, 255), 1)
-
-            # 绘制状态信息
-            cv2.putText(vis_img, f"Status: {status}", (10, 30), self.font, 0.7, (0, 255, 255), 2)
-            cv2.putText(vis_img, f"Position: {self.current_position}", (10, 60), self.font, 0.7, (255, 0, 0), 2)
 
             # 发布图像
             vis_msg = self.bridge.cv2_to_imgmsg(vis_img, "bgr8")
@@ -555,7 +463,7 @@ class OptimizedYoloNode:
             # 绘制暂停状态
             pause_text = f"PAUSED - {remaining_time:.1f}s remaining"
             cv2.putText(vis_img, pause_text, (10, 30), self.font, 0.7, (0, 0, 255), 2)
-            cv2.putText(vis_img, f"Position: {self.current_position}", (10, 60), self.font, 0.7, (255, 0, 0), 2)
+            cv2.putText(vis_img, f"Position: {self.current_region}", (10, 60), self.font, 0.7, (255, 0, 0), 2)
 
             # 发布图像
             vis_msg = self.bridge.cv2_to_imgmsg(vis_img, "bgr8")
@@ -564,7 +472,6 @@ class OptimizedYoloNode:
 
         except Exception as e:
             rospy.logerr(f"暂停可视化发布失败: {str(e)}")
-
 
 def main():
     """主函数"""
