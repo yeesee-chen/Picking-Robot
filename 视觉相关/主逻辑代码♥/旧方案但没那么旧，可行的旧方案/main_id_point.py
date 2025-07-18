@@ -141,7 +141,8 @@ class MainProcessingNode:
         with self.lock:
             if self.arrive == 1 and self.receive_qr == 1:
                 self.qr = msg.data.strip()
-                rospy.loginfo("接收到二维码或机械臂结束消息！")
+                rospy.loginfo("接收到二维码消息！")
+                self.receive_qr = 0
 
     def weather_arrive_callback(self, msg):
         """
@@ -251,24 +252,26 @@ class MainProcessingNode:
         """
         水果成熟度的处理与语音编号的转化
         """
-        ripeness_id = 18 if self.fruit_ripeness else 19
-        return ripeness_id
+        if self.receive_class_ripeness ==1:
+            ripeness_id = 19 if self.fruit_ripeness else 18
+            return ripeness_id
 
     def process_fruit_data(self):
         """
         水果类别处理与语音编号的转化
         """
-        try:
-            if self.fruit_class in self.fruit_class_to_voice_id:
-                self.class_id = self.fruit_class_to_voice_id[self.fruit_class]
-            else:
-                rospy.logwarn(f"未知水果/蔬菜类别: {self.fruit_class}")
-                self.class_id = 0
+        if self.receive_class_ripeness == 1:
+            try:
+                if self.fruit_class in self.fruit_class_to_voice_id:
+                    self.class_id = self.fruit_class_to_voice_id[self.fruit_class]
+                else:
+                    rospy.logwarn(f"未知水果/蔬菜类别: {self.fruit_class}")
+                    self.class_id = 0
 
-        except Exception as e:
-            rospy.logerr(f"处理水果数据时发生错误: {e}")
+            except Exception as e:
+                rospy.logerr(f"处理水果数据时发生错误: {e}")
 
-        return self.class_id
+            return self.class_id
 
     def ggwp_pub(self):
         """
@@ -285,6 +288,7 @@ class MainProcessingNode:
         a_left = { 1, 3, 5, 7}
         b_left = {16, 17, 18, 19}
         b_right = {12, 13, 14, 15}
+        c = {}
         if self.current_waypoint_id_ in a_left:
             if self.next_waypoint_flag == 1 :
                 return 2
@@ -294,6 +298,7 @@ class MainProcessingNode:
             return 3
         elif self.current_waypoint_id_ in b_right:
             return 4
+        elif self.current_waypoint_id_ in
         else:
             return 0
 
@@ -301,12 +306,23 @@ class MainProcessingNode:
         """
         语音播报的逻辑
         """
-        # class_id = self.process_fruit_data()
-        # ripeness_id = self.process_ripeness_data()
+        class_id = self.process_fruit_data()
+        ripeness_id = self.process_ripeness_data()
         ggwp_msg = self.generate_ggwp_pub()
         if self.arrive != 1:
             return
-        # a区播报成熟度
+        else:
+            ggwp = self.generate_ggwp_pub()
+            # a区播报成熟度
+            if ggwp in (1,2):
+                self.arm_pub.publish(f"语音:{ripeness_id}")
+            # b区播报类别
+            elif ggwp in (3,4):
+                self.arm_pub.publish(f"语音:{class_id}")
+            # c区播报成熟度以及类别？
+            elif ggwp == 0 :
+
+
 
     def robot_arm(self):
         """
@@ -379,7 +395,7 @@ class MainProcessingNode:
         """
         主运行循环
         """
-        # A区 (航点1-8)
+        # 初始化
         rospy.loginfo("水果处理节点开始运行...")
         self.next_waypoint_flag = 0
         self.arm_pub.publish("观测位:0;")
@@ -387,6 +403,8 @@ class MainProcessingNode:
         while not rospy.is_shutdown():
             # 发布当前航点ID
             self.publish_waypoint_id()
+            # 发布视觉需要的/ggwp消息
+            # 这样
             self.ggwp_pub()
             # 初始语音播报
             if self.current_waypoint_id_ == 0:
@@ -427,6 +445,7 @@ class MainProcessingNode:
                             self.fruit_ripeness = None
                             break
                         pass
+                    # 播报语音 需要播报成熟度
                     self.voice_pub_logic()
                     self.fruit_class_ripeness = None
                     self.fruit_class = None
