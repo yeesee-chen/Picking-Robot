@@ -56,7 +56,8 @@ class MainProcessingNode:
         self.fruit_class_ripeness = None
         self.fruit_class = None
         self.fruit_ripeness = None
-        self.qr = None
+        self.b_qr = None
+        self.c_qr = None
         self.arrive = None  # 修改：初始化为0而不是None
         self.current_waypoint_id_ = 0
         self.class_id = None
@@ -137,12 +138,18 @@ class MainProcessingNode:
     def qr_callback(self, msg):
         """
         二维码消息回调函数
+        将b区二维码和c区二维码分开储存了，扫描到之后进行储存，不需要2次前往区域扫码
         """
         with self.lock:
             if self.arrive == 1 and self.receive_qr == 1:
-                self.qr = msg.data.strip()
+                self.c_qr = msg.data.strip()
                 rospy.loginfo("接收到二维码消息！")
                 self.receive_qr = 0
+            elif self.arrive == 1 and self.receive_qr == 2:
+                self.b_qr = msg.data.strip()
+                rospy.loginfo("接收到二维码消息！")
+                self.receive_qr = 0
+
 
     def weather_arrive_callback(self, msg):
         """
@@ -162,7 +169,7 @@ class MainProcessingNode:
             self.number_array.clear()
 
             # 按行分割消息
-            lines = [line.strip() for line in self.qr.split('\n') if line.strip()]
+            lines = [line.strip() for line in self.c_qr.split('\n') if line.strip()]
 
             rospy.loginfo(f"解析到 {len(lines)} 行数据: {lines}")
 
@@ -173,7 +180,7 @@ class MainProcessingNode:
                 self.process_fruit_only_type(lines)
             else:
                 # 为机械臂结束所需的信息,如果不是上述任何一种信息，就是机械臂信息，直接写入
-                self.catch_over = self.qr
+                self.catch_over = self.c_qr
 
         except Exception as e:
             rospy.logerr(f"处理二维码消息时发生错误: {e}")
