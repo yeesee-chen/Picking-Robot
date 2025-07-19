@@ -8,6 +8,7 @@ def replan_c_task(test_strings):
     Returns:
         list: 重新规划后的任务序列
     """
+    global c_now_id
     if not test_strings:
         return []
 
@@ -46,6 +47,7 @@ def replan_c_task(test_strings):
         c_now = sequence[i]
         c_next = sequence[i + 1] if i < len(sequence) - 1 else None
 
+
         # 处理位置1-8的情况
         if c_now in (1, 2, 3, 4, 5, 6, 7, 8):
             # 如果当前在右边且之前flag为0，则添加特殊指令
@@ -56,33 +58,87 @@ def replan_c_task(test_strings):
             if c_next and c_next in (1, 2, 3, 4, 5, 6, 7, 8):
                 if flag11 == 1:  # 在右边
                     c_now_id = c_now + 23
-                    result.append(c_now_id)
+                    if c_now in (1, 2, 3, 4):
+                        guancewei = 2
+                    elif c_now in (5, 6, 7, 8):
+                        if c_now_id in (28, 29, 30, 31):
+                            guancewei = 1
+                        else:
+                            guancewei = 2
+                    else:
+                        guancewei = 1
+                    result.append(f"{c_now_id},{guancewei}")
                 else:  # 在左边
                     if c_now in (1, 2, 3, 4):
                         c_now_id = c_now + 23
-                        result.append(c_now_id)
+                        if c_now in (1, 2, 3, 4):
+                            guancewei = 2
+                        elif c_now in (5, 6, 7, 8):
+                            if c_now_id in (28, 29, 30, 31):
+                                guancewei = 1
+                            else:
+                                guancewei = 2
+                        else:
+                            guancewei = 1
+                        result.append(f"{c_now_id},{guancewei}")
                     elif c_now in (5, 6, 7, 8):
                         c_now_id = c_now + 27
-                        result.append(c_now_id)
+                        if c_now in (1, 2, 3, 4):
+                            guancewei = 2
+                        elif c_now in (5, 6, 7, 8):
+                            if c_now_id in (28, 29, 30, 31):
+                                guancewei = 1
+                            else:
+                                guancewei = 2
+                        else:
+                            guancewei = 1
+                        result.append(f"{c_now_id},{guancewei}")
                         if c_next in (1, 2, 3, 4):
                             result.extend([21, 20])
 
             elif c_next and c_next in (9, 10, 11, 12):
                 c_now_id = c_now + 23
-                result.extend([c_now_id, 20, 21])
+                if c_now in (1, 2, 3, 4):
+                    guancewei = 2
+                elif c_now in (5, 6, 7, 8):
+                    if c_now_id in (28, 29, 30, 31):
+                        guancewei = 1
+                    else:
+                        guancewei = 2
+                else:
+                    guancewei = 1
+                result.extend([f"{c_now_id},{guancewei}", 20, 21])
 
             else:
                 # 处理序列末尾的情况
                 if c_next is None:
                     c_now_id = c_now + 23
-                    result.append(c_now_id)
+                    if c_now in (1, 2, 3, 4):
+                        guancewei = 2
+                    elif c_now in (5, 6, 7, 8):
+                        if c_now_id in (28, 29, 30, 31):
+                            guancewei = 1
+                        else:
+                            guancewei = 2
+                    else:
+                        guancewei = 1
+                    result.append(f"{c_now_id},{guancewei}")
                 else:
                     print(f"未处理的情况：位置{i}，当前值{c_now}")
 
         # 处理位置9-12的情况
         elif c_now in (9, 10, 11, 12):
             c_now_id = c_now + 23
-            result.append(c_now_id)
+            if c_now in (1, 2, 3, 4):
+                guancewei = 2
+            elif c_now in (5, 6, 7, 8):
+                if c_now_id in (28, 29, 30, 31):
+                    guancewei = 1
+                else:
+                    guancewei = 2
+            else:
+                guancewei = 1
+            result.append(f"{c_now_id},{guancewei}")
 
             if c_next:
                 if c_next in (1, 2, 3, 4):
