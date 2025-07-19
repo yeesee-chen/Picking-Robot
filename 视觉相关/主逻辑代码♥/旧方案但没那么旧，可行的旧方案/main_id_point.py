@@ -70,6 +70,7 @@ class MainProcessingNode:
         self.catch_over = 0
         self.current_region = None
         self.direction = None
+        self.guancewei = None
         # 设置一个指针，指示现在处于哪个任务期间，0为a区任务，1为b区任务，2为c区任务，默认为0
         self.main_task = 0
 
@@ -133,6 +134,10 @@ class MainProcessingNode:
                 parts = self.fruit_class_ripeness.split('_')
                 self.fruit_class = parts[0]
                 self.fruit_ripeness = int(parts[1])
+                if self.fruit_ripeness == 0 :
+                    self.catchable = True
+                else:
+                    self.catchable = False
                 rospy.loginfo(f"接收到水果类别: {self.fruit_class}")
                 self.receive_class_ripeness = 0
 
@@ -168,7 +173,6 @@ class MainProcessingNode:
         try:
             # 按行分割消息
             lines = [line.strip() for line in self.c_qr.split('\n') if line.strip()]
-
             rospy.loginfo(f"解析到 {len(lines)} 行数据: {lines}")
 
             # 判断消息类型
@@ -208,7 +212,6 @@ class MainProcessingNode:
         """
         try:
             rospy.loginfo("识别为纯水果类型")
-
             fruit_english_array = []
             for fruit in lines:
                 if fruit in self.fruit_chinese_to_english:
@@ -380,25 +383,70 @@ class MainProcessingNode:
                 if c_next and c_next in (1, 2, 3, 4, 5, 6, 7, 8):
                     if flag11 == 1:  # 在右边
                         c_now_id = c_now + 23
+                        if c_now in (1, 2, 3, 4):
+                            self.guancewei = 2
+                        elif c_now in (5, 6, 7, 8):
+                            if c_now_id in (28, 29, 30, 31):
+                                self.guancewei = 1
+                            else:
+                                self.guancewei = 2
+                        else:
+                            self.guancewei = 1
                         result.append(c_now_id)
                     else:  # 在左边
                         if c_now in (1, 2, 3, 4):
                             c_now_id = c_now + 23
+                            if c_now in (1, 2, 3, 4):
+                                self.guancewei = 2
+                            elif c_now in (5, 6, 7, 8):
+                                if c_now_id in (28, 29, 30, 31):
+                                    self.guancewei = 1
+                                else:
+                                    self.guancewei = 2
+                            else:
+                                self.guancewei = 1
                             result.append(c_now_id)
                         elif c_now in (5, 6, 7, 8):
                             c_now_id = c_now + 27
+                            if c_now in (1, 2, 3, 4):
+                                self.guancewei = 2
+                            elif c_now in (5, 6, 7, 8):
+                                if c_now_id in (28, 29, 30, 31):
+                                    self.guancewei = 1
+                                else:
+                                    self.guancewei = 2
+                            else:
+                                self.guancewei = 1
                             result.append(c_now_id)
                             if c_next in (1, 2, 3, 4):
                                 result.extend([21, 20])
 
                 elif c_next and c_next in (9, 10, 11, 12):
                     c_now_id = c_now + 23
+                    if c_now in (1, 2, 3, 4):
+                        self.guancewei = 2
+                    elif c_now in (5, 6, 7, 8):
+                        if c_now_id in (28, 29, 30, 31):
+                            self.guancewei = 1
+                        else:
+                            self.guancewei = 2
+                    else:
+                        self.guancewei = 1
                     result.extend([c_now_id, 20, 21])
 
                 else:
                     # 处理序列末尾的情况
                     if c_next is None:
                         c_now_id = c_now + 23
+                        if c_now in (1, 2, 3, 4):
+                            self.guancewei = 2
+                        elif c_now in (5, 6, 7, 8):
+                            if c_now_id in (28, 29, 30, 31):
+                                self.guancewei = 1
+                            else:
+                                self.guancewei = 2
+                        else:
+                            self.guancewei = 1
                         result.append(c_now_id)
                     else:
                         rospy.loginfo(f"未处理的情况：位置{i}，当前值{c_now}")
@@ -406,6 +454,15 @@ class MainProcessingNode:
             # 处理位置9-12的情况
             elif c_now in (9, 10, 11, 12):
                 c_now_id = c_now + 23
+                if c_now in (1, 2, 3, 4):
+                    self.guancewei = 2
+                elif c_now in (5, 6, 7, 8):
+                    if c_now_id in (28, 29, 30, 31):
+                        self.guancewei = 1
+                    else:
+                        self.guancewei = 2
+                else:
+                    self.guancewei = 1
                 result.append(c_now_id)
 
                 if c_next:
@@ -565,7 +622,14 @@ class MainProcessingNode:
                                 c_task = self.replan_c_task()
                                 num = len(c_task)
                                 for i in range(num):
+                                    self.change_waypoint(c_task[i])
+                                    if self.arrive == 1:
+                                        self.arm_pub.publish(f"观测位:{self.guancewei};")
+                                        self.voice_pub_logic()
 
+
+                    # b区
+                    elif self.main_task == 1:
 
 
             rate.sleep()
