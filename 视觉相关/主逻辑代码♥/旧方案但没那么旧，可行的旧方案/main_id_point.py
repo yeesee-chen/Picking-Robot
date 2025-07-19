@@ -540,7 +540,7 @@ class MainProcessingNode:
                                 self.next_waypoint_flag = 2
 
                     # c区
-                    if self.main_task == 2 :
+                    elif self.main_task == 2 :
                         # a区结束，前往b区扫码处扫码储存，前往c区扫码处扫码储存
                         if self.current_waypoint_id_ == 9:
                             if self.arrive == 1:
