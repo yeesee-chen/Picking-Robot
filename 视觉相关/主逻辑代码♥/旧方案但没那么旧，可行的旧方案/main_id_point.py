@@ -46,8 +46,8 @@ class MainProcessingNode:
         }
 
         # 数据储存器
-        self.chinese_string_array = []
-        self.number_array = []
+        self.b_chinese_string_array = []
+        self.c_chinese_string_array = []
 
         # 消息缓存
         self.pub_position = Point()
@@ -58,7 +58,8 @@ class MainProcessingNode:
         self.fruit_ripeness = None
         self.b_qr = None
         self.c_qr = None
-        self.arrive = None  # 修改：初始化为0而不是None
+        self.number_array = None
+        self.arrive = None
         self.current_waypoint_id_ = 0
         self.class_id = None
         self.catchable = False
@@ -69,10 +70,10 @@ class MainProcessingNode:
         self.catch_over = 0
         self.current_region = None
         self.direction = None
+        # 设置一个指针，指示现在处于哪个任务期间，0为a区任务，1为b区任务，2为c区任务，默认为0
+        self.main_task = 0
 
         # C区相关变量
-        self.c_area_target_index = 0  # 当前要访问的目标索引（0-7）
-        self.c_area_completed = False
 
         # 新加入状态追踪
         self.last_published_waypoint = -1
@@ -144,12 +145,13 @@ class MainProcessingNode:
             if self.arrive == 1 and self.receive_qr == 1:
                 self.c_qr = msg.data.strip()
                 rospy.loginfo("接收到二维码消息！")
+                self.process_qr_data()
                 self.receive_qr = 0
             elif self.arrive == 1 and self.receive_qr == 2:
                 self.b_qr = msg.data.strip()
                 rospy.loginfo("接收到二维码消息！")
+                self.process_qr_data()
                 self.receive_qr = 0
-
 
     def weather_arrive_callback(self, msg):
         """
@@ -164,49 +166,19 @@ class MainProcessingNode:
         二维码消息解析函数
         """
         try:
-            # 清空之前的数据
-            self.chinese_string_array.clear()
-            self.number_array.clear()
-
             # 按行分割消息
             lines = [line.strip() for line in self.c_qr.split('\n') if line.strip()]
 
             rospy.loginfo(f"解析到 {len(lines)} 行数据: {lines}")
 
             # 判断消息类型
-            if self.is_vegetable_with_numbers_type(lines):
+            if self.receive_qr == 1:
                 self.process_vegetable_with_numbers_type(lines)
-            elif self.is_fruit_only_type(lines):
+            elif self.receive_qr == 2:
                 self.process_fruit_only_type(lines)
-            else:
-                # 为机械臂结束所需的信息,如果不是上述任何一种信息，就是机械臂信息，直接写入
-                self.catch_over = self.c_qr
 
         except Exception as e:
             rospy.logerr(f"处理二维码消息时发生错误: {e}")
-
-    def is_vegetable_with_numbers_type(self, lines):
-        """
-        判断是否为蔬菜+数字类型
-        """
-        if len(lines) < 2:
-            return False
-
-        last_line = lines[-1]
-        pattern = r'^[\d,\s]+$'
-        return bool(re.match(pattern, last_line))
-
-    def is_fruit_only_type(self, lines):
-        """
-        判断是否为纯水果类型
-        """
-        if len(lines) != 8:
-            return False
-
-        for line in lines:
-            if line not in self.fruit_chinese_to_english:
-                return False
-        return True
 
     def process_vegetable_with_numbers_type(self, lines):
         """
@@ -217,18 +189,15 @@ class MainProcessingNode:
 
             if len(lines) >= 9:
                 vegetable_lines = lines[:8]
-                number_line = lines[-1]
+                number_line: String = lines[-1]
+                self.number_array = number_line
             else:
                 rospy.logwarn("数据行数不足")
                 return
 
-            self.chinese_string_array = vegetable_lines[:]
-            rospy.loginfo(f"存储蔬菜名称数组: {self.chinese_string_array}")
-
-            numbers = [int(x.strip()) for x in number_line.split(',') if x.strip().isdigit()]
-            # 储存的数字数组
-            self.number_array = numbers[:]
-            rospy.loginfo(f"存储数字数组: {self.number_array}")
+            self.c_chinese_string_array = vegetable_lines[:]
+            rospy.loginfo(f"存储蔬菜名称数组: {self.c_chinese_string_array}")
+            rospy.loginfo(f"存储数字字符串: {self.number_array}")
 
         except Exception as e:
             rospy.logerr(f"处理蔬菜+数字类型失败: {e}")
@@ -249,8 +218,8 @@ class MainProcessingNode:
                     rospy.logwarn(f"未知水果名称: {fruit}")
                     fruit_english_array.append(fruit)
 
-            self.chinese_string_array = fruit_english_array[:]
-            rospy.loginfo(f"存储水果英文数组: {self.chinese_string_array}")
+            self.b_chinese_string_array = fruit_english_array[:]
+            rospy.loginfo(f"存储水果英文数组: {self.b_chinese_string_array}")
 
         except Exception as e:
             rospy.logerr(f"处理纯水果类型失败: {e}")
@@ -295,7 +264,7 @@ class MainProcessingNode:
         a_left = { 1, 3, 5, 7}
         b_left = {16, 17, 18, 19}
         b_right = {12, 13, 14, 15}
-        c = {}
+        c = {24,25,26,27,28,29,30,31,32,33,34,35}
         if self.current_waypoint_id_ in a_left:
             if self.next_waypoint_flag == 1 :
                 return 2
@@ -305,7 +274,8 @@ class MainProcessingNode:
             return 3
         elif self.current_waypoint_id_ in b_right:
             return 4
-        elif self.current_waypoint_id_ in
+        elif self.current_waypoint_id_ in c:
+            return 5
         else:
             return 0
 
@@ -315,7 +285,6 @@ class MainProcessingNode:
         """
         class_id = self.process_fruit_data()
         ripeness_id = self.process_ripeness_data()
-        ggwp_msg = self.generate_ggwp_pub()
         if self.arrive != 1:
             return
         else:
@@ -326,10 +295,11 @@ class MainProcessingNode:
             # b区播报类别
             elif ggwp in (3,4):
                 self.arm_pub.publish(f"语音:{class_id}")
-            # c区播报成熟度以及类别？
-            elif ggwp == 0 :
-
-
+            # c区播报类别和成熟度
+            elif ggwp == 5 :
+                self.arm_pub.publish(f"语音:{class_id}")
+                rospy.sleep(1)
+                self.arm_pub.publish(f"语音:{ripeness_id}")
 
     def robot_arm(self):
         """
@@ -357,26 +327,99 @@ class MainProcessingNode:
             # 抓取指针复位
             self.catch_over = 0
 
-    def get_next_c_area_waypoint(self):
+    def replan_c_task(self):
         """
-        获取C区下一个要访问的航点ID
+        根据获得的c区数组，重新规划顺序
         """
-        if self.c_area_target_index >= len(self.number_array):
-            return None
+        test_strings = self.number_array
+        if not test_strings:
+            return []
 
-        # 根据二维码中的数字映射到对应的航点
-        target_number = self.number_array[self.c_area_target_index]
+        parts = test_strings.split(',')
 
-        # 假设数字1-8对应航点24-31（根据实际情况调整）
-        if 1 <= target_number <= 8:
-            return target_number + 23  # 24-31
-        else:
-            # 如果数字超出范围，使用剩余的航点32-35
-            remaining_waypoints = [32, 33, 34, 35]
-            if self.c_area_target_index - 8 < len(remaining_waypoints):
-                return remaining_waypoints[self.c_area_target_index - 8]
+        # 验证输入格式
+        try:
+            sequence = [int(x) for x in parts]
+        except ValueError:
+            print("错误：输入包含非数字字符")
+            return []
 
-        return None
+        # 验证数字范围
+        if not all(1 <= x <= 12 for x in sequence):
+            print("错误：数字必须在1-12范围内")
+            return []
+
+        if len(sequence) != 8:
+            print("错误：序列长度必须为8")
+            return []
+
+        result = []
+        flag = 0  # 用于跟踪某种状态
+
+        # 判断起始位置：1-4为右边，5-12为左边
+        def is_right_side(pos):
+            return pos in (1, 2, 3, 4)
+
+        def is_left_side(pos):
+            return pos in (5, 6, 7, 8, 9, 10, 11, 12)
+
+        # 确定初始方向标志
+        flag11 = 1 if is_right_side(sequence[0]) else 0
+
+        for i in range(len(sequence)):
+            c_now = sequence[i]
+            c_next = sequence[i + 1] if i < len(sequence) - 1 else None
+
+            # 处理位置1-8的情况
+            if c_now in (1, 2, 3, 4, 5, 6, 7, 8):
+                # 如果当前在右边且之前flag为0，则添加特殊指令
+                if flag == 0 and flag11 == 1:
+                    result.append(20)
+                    flag = 1
+
+                if c_next and c_next in (1, 2, 3, 4, 5, 6, 7, 8):
+                    if flag11 == 1:  # 在右边
+                        c_now_id = c_now + 23
+                        result.append(c_now_id)
+                    else:  # 在左边
+                        if c_now in (1, 2, 3, 4):
+                            c_now_id = c_now + 23
+                            result.append(c_now_id)
+                        elif c_now in (5, 6, 7, 8):
+                            c_now_id = c_now + 27
+                            result.append(c_now_id)
+                            if c_next in (1, 2, 3, 4):
+                                result.extend([21, 20])
+
+                elif c_next and c_next in (9, 10, 11, 12):
+                    c_now_id = c_now + 23
+                    result.extend([c_now_id, 20, 21])
+
+                else:
+                    # 处理序列末尾的情况
+                    if c_next is None:
+                        c_now_id = c_now + 23
+                        result.append(c_now_id)
+                    else:
+                        rospy.loginfo(f"未处理的情况：位置{i}，当前值{c_now}")
+
+            # 处理位置9-12的情况
+            elif c_now in (9, 10, 11, 12):
+                c_now_id = c_now + 23
+                result.append(c_now_id)
+
+                if c_next:
+                    if c_next in (1, 2, 3, 4):
+                        result.extend([21, 20])
+                    elif c_next in (5, 6, 7, 8):
+                        pass  # 不需要额外操作
+                    # 对于c_next in (9, 10, 11, 12)的情况，不需要额外操作
+
+            else:
+                rospy.logdebug(f"警告：位置{i}的值{c_now}超出有效范围")
+                return result
+
+        return result
 
     def publish_waypoint_id(self):
         """
@@ -411,90 +454,120 @@ class MainProcessingNode:
             # 发布当前航点ID
             self.publish_waypoint_id()
             # 发布视觉需要的/ggwp消息
-            # 这样
             self.ggwp_pub()
-            # 初始语音播报
-            if self.current_waypoint_id_ == 0:
-                # 播报并初始化动作
-                self.initial_voice_broadcast()
-                rospy.sleep(5)
-                self.arm_pub.publish("动作组:0;")
-                self.fruit_class = None
-                self.fruit_ripeness = None
-                self.change_waypoint(1)
+            if self.main_task == 0:
+                # 初始语音播报
+                if self.current_waypoint_id_ == 0:
+                    # 播报并初始化动作
+                    self.initial_voice_broadcast()
+                    rospy.sleep(5)
+                    self.arm_pub.publish("动作组:0;")
+                    # self.fruit_class = None
+                    # self.fruit_ripeness = None
+                    self.change_waypoint(1)
 
-            # A区 (航点1-8)
-            elif 1 <= self.current_waypoint_id_ <= 8:
-                rospy.loginfo(f"A区 - 当前航点: {self.current_waypoint_id_}")
-                rospy.loginfo(f"A区 - next_waypoint_flag : {self.next_waypoint_flag}")
-                if self.arrive == 1:
-                    rospy.sleep(1)
-                    if self.next_waypoint_flag == 0:
-                        self.arm_pub.publish("观测位:1;")
+                # A区 (航点1-8)
+                elif 1 <= self.current_waypoint_id_ <= 8:
+                    rospy.loginfo(f"A区 - 当前航点: {self.current_waypoint_id_}")
+                    rospy.loginfo(f"A区 - next_waypoint_flag : {self.next_waypoint_flag}")
+                    if self.arrive == 1:
+                        rospy.sleep(1)
+                        if self.next_waypoint_flag == 0:
+                            self.arm_pub.publish("观测位:1;")
+                        elif self.next_waypoint_flag == 1:
+                            self.arm_pub.publish("观测位:2;")
+                        rospy.sleep(2)
+                        # 此时开始订阅话题得到point，class，ripeness
+                        self.receive_class_ripeness = 1
+                        self.receive_point = 1
+                        # 保护机制
+                        count = 0
+                        while self.receive_class_ripeness == 1 and self.receive_point == 1 and self.next_waypoint_flag < 2:
+                            count = count + 1
+                            rospy.sleep(0.1)
+                            if count == 100:
+                                rospy.loginfo("无法识别！无法接收水果信息！--触发保护机制--")
+                                self.receive_class_ripeness = 0
+                                self.receive_point = 0
+                                self.fruit_ripeness = None
+                                self.fruit_class = None
+                                self.fruit_ripeness = None
+                                break
+                            pass
+                        # 播报语音 需要播报成熟度
+                        self.voice_pub_logic()
+                        self.fruit_class_ripeness = None
+                        self.fruit_class = None
+                        self.fruit_ripeness = None
+                        self.fruit_point = None
+                        if self.next_waypoint_flag == 2:
+                            if self.current_waypoint_id_ < 8:
+                                # 只导航到1，3，5，7，为a区的四个点
+                                self.current_waypoint_id_ = self.current_waypoint_id_ + 2
+                                self.change_waypoint(self.current_waypoint_id_)
+                                self.next_waypoint_flag = 0
+                            else:
+                                # 过了4轮了去9号点
+                                self.change_waypoint(9)
+                                # 任务驱动前往c区
+                                self.main_task = 2
+                                self.next_waypoint_flag = 0
+                        # 左边
+                        elif self.next_waypoint_flag == 0:
+                            if self.catchable:
+                                self.catchable = 0
+                                # 坐标抓取
+                                self.robot_arm()
+                                # 前往下一个航点
+                                self.next_waypoint_flag = 1
+                            else:
+                                # 复位
+                                self.arm_pub.publish("动作组:0;")
+                                rospy.sleep(2)
+                                self.next_waypoint_flag = 1
+                        # 右边
+                        elif self.next_waypoint_flag == 1:
+                            # 开始动作组
+                            if self.catchable:
+                                self.catchable = 0
+                                # 坐标抓取
+                                self.robot_arm()
+                                # 前往下一个航点
+                                self.next_waypoint_flag = 2
+                            else:
+                                self.arm_pub.publish("动作组:0;")
+                                rospy.sleep(2)
+                                self.next_waypoint_flag = 2
 
-                    elif self.next_waypoint_flag == 1:
-                        self.arm_pub.publish("观测位:2;")
-                    rospy.sleep(2)
-                    # 此时开始订阅话题得到point，class，ripeness
-                    self.receive_class_ripeness = 1
-                    self.receive_point = 1
-                    # 保护机制
-                    count = 0
-                    while self.receive_class_ripeness == 1 and self.receive_point == 1 and self.next_waypoint_flag < 2:
-                        count = count + 1
-                        rospy.sleep(0.1)
-                        if count == 100:
-                            rospy.loginfo("无法识别！无法接收水果信息！--触发保护机制--")
-                            self.receive_class_ripeness = 0
-                            self.receive_point = 0
-                            self.fruit_ripeness = None
-                            self.fruit_class = None
-                            self.fruit_ripeness = None
-                            break
-                        pass
-                    # 播报语音 需要播报成熟度
-                    self.voice_pub_logic()
-                    self.fruit_class_ripeness = None
-                    self.fruit_class = None
-                    self.fruit_ripeness = None
-                    self.fruit_point = None
+                    # c区
+                    if self.main_task == 2 :
+                        # a区结束，前往b区扫码处扫码储存，前往c区扫码处扫码储存
+                        if self.current_waypoint_id_ == 9:
+                            if self.arrive == 1:
+                                self.change_waypoint(11)
+                        elif self.current_waypoint_id_ == 11:
+                            if self.arrive == 1:
+                                # 储存到self.b_chinese_string_array
+                                self.receive_qr = 2
+                                self.change_waypoint(20)
+                        # 在c区任务期间，20，21只会进行一次
+                        elif self.current_waypoint_id_ == 20 and len(self.number_array) == 0:
+                            if self.arrive == 1:
+                                self.change_waypoint(21)
+                        # 到达c区扫码处并进行任务规划，
+                        elif self.current_waypoint_id_ == 21 and len(self.number_array) == 0:
+                            if self.arrive == 1:
+                                # 储存到
+                                # self.c_chinese_string_array
+                                # self.number_array
+                                self.receive_qr = 1
+                                # 此时self.number_array != 0 了，所以当之后运行到20，21，不会进入这个循环
+                                c_task = self.replan_c_task()
+                                num = len(c_task)
+                                for i in range(num):
 
-                    if self.next_waypoint_flag == 2:
-                        if self.current_waypoint_id_ < 8:
-                            # 只导航到1，3，5，7，为a区的四个点
-                            self.current_waypoint_id_ = self.current_waypoint_id_ + 2
-                            self.change_waypoint(self.current_waypoint_id_)
-                            self.next_waypoint_flag = 0
-                        else:
-                            # 过了4轮了去9号点
-                            self.change_waypoint(9)
-                            self.next_waypoint_flag = 0
-                    # 左边
-                    elif self.next_waypoint_flag == 0:
-                        if self.catchable:
-                            self.catchable = 0
-                            # 坐标抓取
-                            self.robot_arm()
-                            # 前往下一个航点
-                            self.next_waypoint_flag = 1
-                        else:
-                            # 复位
-                            self.arm_pub.publish("动作组:0;")
-                            rospy.sleep(2)
-                            self.next_waypoint_flag = 1
-                    # 右边
-                    elif self.next_waypoint_flag == 1:
-                        # 开始动作组
-                        if self.catchable:
-                            self.catchable = 0
-                            # 坐标抓取
-                            self.robot_arm()
-                            # 前往下一个航点
-                            self.next_waypoint_flag = 2
-                        else:
-                            self.arm_pub.publish("动作组:0;")
-                            rospy.sleep(2)
-                            self.next_waypoint_flag = 2
+
+
             rate.sleep()
 
 def main():
