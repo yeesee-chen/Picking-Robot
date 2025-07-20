@@ -687,7 +687,64 @@ class MainProcessingNode:
                                     self.change_waypoint(20)
                                     # 进行b区任务
                                     self.main_task = 1
+            elif self.main_task == 1:
+                # 1. 航点 → 二维码下标（0 基）
+                wp_qr = [19, 15, 18, 14, 17, 13, 16, 12]
+                qr_idx = [7, 3, 6, 2, 5, 1, 4, 0]  # 对应 b_chinese_string_array 的位置
 
+                # 2. 当前航点是否在列表里
+                try:
+                    pos = wp_qr.index(self.current_waypoint_id_)
+                except ValueError:
+                    # 20 号或其他非抓取航点
+                    if self.current_waypoint_id_ == 20 and self.arrive == 1:
+                        self.change_waypoint(19)
+                    return
+
+                # 3. 抓取或复位
+                if self.arrive == 1:
+                    # 只有给receive信号才会有值，需要给信号
+                    self.receive_class_ripeness = 1
+                    self.receive_point = 1
+                    # 保护机制
+                    count = 0
+                    while self.receive_class_ripeness == 1 and self.receive_point == 1 and self.next_waypoint_flag < 2:
+                        count = count + 1
+                        rospy.sleep(0.1)
+                        if count == 100:
+                            rospy.loginfo("无法识别！无法接收水果信息！--触发保护机制--")
+                            self.receive_class_ripeness = 0
+                            self.receive_point = 0
+                            self.fruit_ripeness = None
+                            self.fruit_class = None
+                            self.fruit_ripeness = None
+                            break
+                        pass
+                    # 播报语音 需要播报成熟度
+                    self.voice_pub_logic()
+
+                    # 抓取的条件
+                    expected = self.b_chinese_string_array[qr_idx[pos]]
+                    pick_flag = (
+                            self.catchable and
+                            self.fruit_class == expected
+                            # self.fruit_ripeness == 1 catchable就代表了是成熟的，
+                            # 而且因为打标签，fruit_ripeness 0是成熟1是不成熟，catchable 1是能抓（成熟）0是不能抓（不成熟）
+                    )
+                    # 播报是在抓取之前的
+                    if pick_flag:
+                        self.robot_arm()
+                    else:
+                        self.arm_pub.publish("动作组:0;")
+                        rospy.sleep(2)
+
+                    # 4. 清空视觉缓存 + 前往下一航点
+                    self.fruit_class_ripeness = None
+                    self.fruit_class = None
+                    self.fruit_ripeness = None
+                    self.fruit_point = None
+                    next_wp = wp_qr[pos + 1] if pos + 1 < len(wp_qr) else 11  # 12 之后去 11
+                    self.change_waypoint(next_wp)
 
             rate.sleep()
 
