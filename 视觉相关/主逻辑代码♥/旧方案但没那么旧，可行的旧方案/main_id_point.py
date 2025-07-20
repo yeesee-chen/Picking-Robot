@@ -687,7 +687,7 @@ class MainProcessingNode:
                                     self.main_task = 1
 
 
-            rate.slee()
+            rate.sleep()
 
 def main():
     """
