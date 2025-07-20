@@ -436,6 +436,48 @@ class StateMachineNode:
         elif self.area_b_state == AreaBState.COMPLETED:
             self.transition_to_finished()
 
+    def handle_b_navigate(self):
+        """前往当前 B 区航点"""
+        if self.b_current_index == 0 and self.current_waypoint_id != 19:
+            # 第一次进入 B 区，跳到 19
+            self.set_waypoint(19)
+            self.b_current_index = 0
+            self.area_b_state = AreaBState.SCAN_AND_GRAB
+            return
+
+        if self.has_arrived:
+            self.area_b_state = AreaBState.SCAN_AND_GRAB
+
+    def handle_b_scan_and_grab(self):
+        """在当前航点处理抓取"""
+        idx = self.b_current_index
+        wp = self.b_waypoint_list[idx]
+        expected = self.b_qr_data[self.b_qr_indices[idx]]
+
+        # 等待视觉
+        self.task_state = TaskState.SETTING_OBSERVATION
+        self.arm_pub.publish(f"观测位:{self.generate_b_observation(wp)};")
+        self.receive_vision_once()
+
+        # 判断类别并抓取
+        if self.should_grab_fruit() and self.fruit_class == expected:
+            self.execute_grab_action()
+        else:
+            self.arm_pub.publish("动作组:0;")
+            rospy.sleep(1)
+
+        self.reset_vision_data()
+        self.area_b_state = AreaBState.MOVE_TO_NEXT
+
+    def handle_b_move_to_next(self):
+        """移动到下一条目"""
+        self.b_current_index += 1
+        #列表逻辑
+        if self.b_current_index >= len(self.b_waypoint_list):
+            self.area_b_state = AreaBState.COMPLETED
+        else:
+            self.set_waypoint(self.b_waypoint_list[self.b_current_index])
+            self.area_b_state = AreaBState.NAVIGATE_TO_POINT
 
     # =================== 通用任务执行 ===================
     def execute_observation_task(self, observation_pos):
@@ -578,6 +620,20 @@ class StateMachineNode:
         current_time = time.time()
         if current_time - self.state_start_time > 60:  # 总体超时保护
             rospy.logwarn("状态执行超时，可能需要人工干预")
+
+    def generate_b_observation(self, waypoint):
+        if waypoint in {16, 17, 18, 19}:  # 左侧
+            return 3
+        elif waypoint in {12, 13, 14, 15}:  # 右侧
+            return 4
+        return 0
+
+    def receive_vision_once(self):
+        """一次性获取视觉结果，带超时"""
+        timeout = 50
+        while timeout and (self.fruit_class is None or self.fruit_point is None):
+            rospy.sleep(0.1)
+            timeout -= 1
 
     # =================== 数据处理函数 ===================
     def process_b_qr_data(self, qr_data):
