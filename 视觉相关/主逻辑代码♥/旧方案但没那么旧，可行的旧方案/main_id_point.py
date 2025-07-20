@@ -58,7 +58,7 @@ class MainProcessingNode:
         self.fruit_ripeness = None
         self.b_qr = None
         self.c_qr = None
-        self.number_array = None
+        self.number_array = ""
         self.arrive = None
         self.current_waypoint_id_ = 0
         self.class_id = None
@@ -101,7 +101,7 @@ class MainProcessingNode:
         # self.arm_catchover_sub = rospy.Subscriber('/balabala', String, self.catchover_callback)
 
         # 发布者
-        self.arm_pub = rospy.Publisher('/arm_voice', queue_size=10)
+        self.arm_pub = rospy.Publisher('/arm_voice',String, queue_size=10)
         # self.ggwp_pub = rospy.Publisher('/ggwp', Int32, queue_size=10)
         self.waypoint_i_d_pub = rospy.Publisher('/waypoint_i_d', Int32, queue_size=1)
 
@@ -491,6 +491,9 @@ class MainProcessingNode:
                 return result
 
         return result
+
+    def handel_c_task(self):
+        if self.c_state
 
     def publish_waypoint_id(self):
         """
