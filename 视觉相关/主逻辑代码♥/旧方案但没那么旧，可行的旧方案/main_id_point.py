@@ -526,6 +526,7 @@ class MainProcessingNode:
             self.publish_waypoint_id()
             # 发布视觉需要的/ggwp消息
             self.ggwp_pub()
+            # a区
             if self.main_task == 0:
                 # 初始语音播报
                 if self.current_waypoint_id_ == 0:
@@ -609,8 +610,7 @@ class MainProcessingNode:
                                 self.arm_pub.publish("动作组:0;")
                                 rospy.sleep(1)
                                 self.next_waypoint_flag = 2
-
-                    # c区
+            # c区
             elif self.main_task == 2 :
                 # a区结束，前往b区扫码处扫码储存，前往c区扫码处扫码储存
                 if self.current_waypoint_id_ == 9:
@@ -687,6 +687,7 @@ class MainProcessingNode:
                                     self.change_waypoint(20)
                                     # 进行b区任务
                                     self.main_task = 1
+            # b区
             elif self.main_task == 1:
                 # 1. 航点 → 二维码下标（0 基）
                 wp_qr = [19, 15, 18, 14, 17, 13, 16, 12]
