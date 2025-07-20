@@ -156,7 +156,7 @@ class OptimizedYoloNode:
     def _position_callback(self, msg):
         """小车位置回调函数"""
         position = msg.data
-        if position in range(1, 7):
+        if position in range(1, 6):
             self.current_region = position
             rospy.loginfo(f"更新小车位置: 位置 {position}")
         else:
@@ -400,7 +400,7 @@ class OptimizedYoloNode:
                 # 相机坐标系转机械臂基坐标系
                 x_base = x_cam + x_init
                 y_base = y_init + y_cam
-                z_base = -0.018
+                z_base = -0.1
                 rho = np.sqrt(x_base ** 2 + y_base ** 2)
                 rho = rho + 0.05
                 phi = np.arctan2(y_base, x_base)
@@ -411,7 +411,7 @@ class OptimizedYoloNode:
             if flag == 2 :
                 x_base = x_init - x_cam
                 y_base = y_init + y_cam
-                z_base = -0.018
+                z_base = -0.1
                 rho = np.sqrt(x_base ** 2 + y_base ** 2)
                 rho = rho + 0.05
                 phi = np.arctan2(y_base, x_base)

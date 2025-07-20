@@ -279,8 +279,10 @@ class MainProcessingNode:
             return 3
         elif self.current_waypoint_id_ in b_right:
             return 4
-        elif self.current_waypoint_id_ in c:
+        elif self.current_waypoint_id_ in c and self.guancewei == 1:
             return 5
+        elif self.current_waypoint_id_ in c and self.guancewei == 2:
+            return 6
         else:
             return 0
 
@@ -295,13 +297,13 @@ class MainProcessingNode:
         else:
             ggwp = self.generate_ggwp_pub()
             # a区播报成熟度
-            if ggwp in (1,2):
+            if ggwp in (1, 2):
                 self.arm_pub.publish(f"语音:{ripeness_id}")
             # b区播报类别
-            elif ggwp in (3,4):
+            elif ggwp in (3, 4):
                 self.arm_pub.publish(f"语音:{class_id}")
             # c区播报类别和成熟度
-            elif ggwp == 5 :
+            elif ggwp in (5, 6) :
                 self.arm_pub.publish(f"语音:{class_id}")
                 rospy.sleep(1)
                 self.arm_pub.publish(f"语音:{ripeness_id}")
