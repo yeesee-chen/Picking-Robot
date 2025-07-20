@@ -62,7 +62,7 @@ class MainProcessingNode:
         self.arrive = None
         self.current_waypoint_id_ = 0
         self.class_id = None
-        self.catchable = False
+        self.catchable = 0
         self.fruit_count = 0
         self.receive_class_ripeness = 0
         self.receive_point = 0
@@ -97,6 +97,8 @@ class MainProcessingNode:
         self.weather_arrive_sub = rospy.Subscriber('/weather_arrive', Int8, self.weather_arrive_callback)
         # 订阅二维码信息的标志位
         self.qr_sub = rospy.Subscriber('/qr_arm_message', String, self.qr_callback)
+        # 加入闭环控制代码，机械臂闭环控制，到达逆解算某个位置之后catchover = 1
+        # self.arm_catchover_sub = rospy.Subscriber('/balabala', String, self.catchover_callback)
 
         # 发布者
         self.arm_pub = rospy.Publisher('/arm_voice', queue_size=10)
@@ -135,9 +137,9 @@ class MainProcessingNode:
                 self.fruit_class = parts[0]
                 self.fruit_ripeness = int(parts[1])
                 if self.fruit_ripeness == 0 :
-                    self.catchable = True
+                    self.catchable = 1
                 else:
-                    self.catchable = False
+                    self.catchable = 0
                 rospy.loginfo(f"接收到水果类别: {self.fruit_class}")
                 self.receive_class_ripeness = 0
 
@@ -313,7 +315,7 @@ class MainProcessingNode:
         z = self.fruit_point.z * 100
         phi = self.fruit_point.y
         self.arm_pub.publish(f"机械臂:{r,z,phi};")
-
+        # 这里是闭环控制的，如果存在那就直接夹取，如果不存在，那么就定时之后再夹取
         if self.catch_over == 1 :
             # 发布爪子夹紧动作
             self.arm_pub.publish("爪子:0;")
@@ -323,12 +325,22 @@ class MainProcessingNode:
             rospy.sleep(4)
             # 发布爪子张开动作
             self.arm_pub.publish("爪子:1;")
-            self.fruit_count += 1
             rospy.sleep(2)
             # 计数
             self.fruit_count += 1
             # 抓取指针复位
             self.catch_over = 0
+        else:
+            # 保护机制，5s之后进行抓取
+            count = 0
+            while self.catch_over == 0:
+                count = count + 1
+                rospy.sleep(0.1)
+                if count == 50:
+                    self.catch_over = 1
+                    break
+                pass
+
 
     def replan_c_task(self):
         """
@@ -580,7 +592,7 @@ class MainProcessingNode:
                             else:
                                 # 复位
                                 self.arm_pub.publish("动作组:0;")
-                                rospy.sleep(2)
+                                rospy.sleep(1)
                                 self.next_waypoint_flag = 1
                         # 右边
                         elif self.next_waypoint_flag == 1:
@@ -593,45 +605,89 @@ class MainProcessingNode:
                                 self.next_waypoint_flag = 2
                             else:
                                 self.arm_pub.publish("动作组:0;")
-                                rospy.sleep(2)
+                                rospy.sleep(1)
                                 self.next_waypoint_flag = 2
 
                     # c区
-                    elif self.main_task == 2 :
-                        # a区结束，前往b区扫码处扫码储存，前往c区扫码处扫码储存
-                        if self.current_waypoint_id_ == 9:
+            elif self.main_task == 2 :
+                # a区结束，前往b区扫码处扫码储存，前往c区扫码处扫码储存
+                if self.current_waypoint_id_ == 9:
+                    if self.arrive == 1:
+                        self.change_waypoint(11)
+                elif self.current_waypoint_id_ == 11:
+                    if self.arrive == 1:
+                        # 储存到self.b_chinese_string_array
+                        self.receive_qr = 2
+                        self.change_waypoint(20)
+                # 在c区任务期间，20，21只会进行一次
+                elif self.current_waypoint_id_ == 20 and len(self.number_array) == 0:
+                    if self.arrive == 1:
+                        self.change_waypoint(21)
+                # 到达c区扫码处并进行任务规划，
+                elif self.current_waypoint_id_ == 21 and len(self.number_array) == 0:
+                    if self.arrive == 1:
+                        # 储存到
+                        # self.c_chinese_string_array
+                        # self.number_array
+                        self.receive_qr = 1
+                        # 此时self.number_array != 0 了，所以当之后运行到20，21，不会进入这个循环
+                        c_task = self.replan_c_task()
+                        c_round = 0
+                        for i in range(len(c_task)):
+                            self.change_waypoint(c_task[i])
                             if self.arrive == 1:
-                                self.change_waypoint(11)
-                        elif self.current_waypoint_id_ == 11:
-                            if self.arrive == 1:
-                                # 储存到self.b_chinese_string_array
-                                self.receive_qr = 2
-                                self.change_waypoint(20)
-                        # 在c区任务期间，20，21只会进行一次
-                        elif self.current_waypoint_id_ == 20 and len(self.number_array) == 0:
-                            if self.arrive == 1:
+                                c_round = c_round + 1
+                                # 前往观测位并且播报
+                                self.arm_pub.publish(f"观测位:{self.guancewei};")
+                                self.receive_class_ripeness = 1
+                                self.receive_point = 1
+                                # 保护机制
+                                count = 0
+                                while self.receive_class_ripeness == 1 and self.receive_point == 1 and self.next_waypoint_flag < 2:
+                                    count = count + 1
+                                    rospy.sleep(0.1)
+                                    if count == 100:
+                                        rospy.loginfo("无法识别！无法接收水果信息！--触发保护机制--")
+                                        self.receive_class_ripeness = 0
+                                        self.receive_point = 0
+                                        self.fruit_ripeness = None
+                                        self.fruit_class = None
+                                        self.fruit_ripeness = None
+                                        break
+                                    pass
+                                # 播报语音 需要播报成熟度
+                                self.voice_pub_logic()
+                                self.fruit_class_ripeness = None
+                                self.fruit_class = None
+                                self.fruit_ripeness = None
+                                self.fruit_point = None
+                                if self.catchable:
+                                    self.catchable = 0
+                                    # 坐标抓取
+                                    self.robot_arm()
+                                else:
+                                    self.arm_pub.publish("动作组:0;")
+                                    rospy.sleep(1)
+                        # 结束循环，c区任务结束，但要去倾倒果子并回到航点20
+                        if c_round == len(c_task):
+                            # 倒果子
+                            self.change_waypoint(36)
+                            if self.current_waypoint_id_ == 36 and self.arrive == 1:
+                                # qindaoguozi
+                                self.arm_pub.publish("")
+                                rospy.sleep(2)
+                                # 播报数量，计数清零
+                                self.arm_pub.publish(f"语音:{self.fruit_count}")
+                                self.fruit_count = 0
                                 self.change_waypoint(21)
-                        # 到达c区扫码处并进行任务规划，
-                        elif self.current_waypoint_id_ == 21 and len(self.number_array) == 0:
-                            if self.arrive == 1:
-                                # 储存到
-                                # self.c_chinese_string_array
-                                # self.number_array
-                                self.receive_qr = 1
-                                # 此时self.number_array != 0 了，所以当之后运行到20，21，不会进入这个循环
-                                c_task = self.replan_c_task()
-                                num = len(c_task)
-                                for i in range(num):
-                                    self.change_waypoint(c_task[i])
-                                    if self.arrive == 1:
-                                        self.arm_pub.publish(f"观测位:{self.guancewei};")
-                                        self.voice_pub_logic()
+                            elif self.current_waypoint_id_ == 21 and self.arrive == 1:
+                                if self.arrive == 1:
+                                    self.change_waypoint(20)
+                                    # 进行b区任务
+                                    self.main_task = 1
 
 
-
-
-
-            rate.sleep()
+            rate.slee()
 
 def main():
     """
