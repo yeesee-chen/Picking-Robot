@@ -132,8 +132,7 @@ class StateMachineNode:
         # C区特定
         self.c_task_list = []
         self.c_current_index = 0
-        self.guancewei = 0
-        self.current_observation_mode = 1  # 观测位模式
+        self.guancewei = 0 # 观测位模式
 
         # 线程锁
         self.data_lock = threading.Lock()
@@ -271,8 +270,6 @@ class StateMachineNode:
             self.handle_a_observe_left()
         elif self.area_a_state == AreaAState.OBSERVE_RIGHT:
             self.handle_a_observe_right()
-        elif self.area_a_state == AreaAState.PROCESS_RESULT:
-            self.handle_a_process_result()
         elif self.area_a_state == AreaAState.GRAB_FRUIT:
             self.handle_a_grab_fruit()
         elif self.area_a_state == AreaAState.MOVE_TO_NEXT:
@@ -292,6 +289,7 @@ class StateMachineNode:
         if self.has_arrived:
             if self.current_observation_side == 0:
                 self.area_a_state = AreaAState.OBSERVE_LEFT
+            # 这里是看有几轮了
             else:
                 self.area_a_state = AreaAState.OBSERVE_RIGHT
             self.task_state = TaskState.SETTING_OBSERVATION
@@ -314,9 +312,6 @@ class StateMachineNode:
                 self.area_a_state = AreaAState.GRAB_FRUIT
             else:
                 self.area_a_state = AreaAState.MOVE_TO_NEXT
-
-    # def handle_a_process_result(self):
-    #     """处理收到的水果信息"""
 
     def handle_a_grab_fruit(self):
         """A区抓取果实"""
@@ -373,6 +368,16 @@ class StateMachineNode:
         if self.has_arrived and len(self.b_qr_data) > 0:
             self.area_c_state = AreaCState.GOTO_C_QR
 
+    def handle_c_goto_c_qr(self):
+        """前往C区二维码"""
+        self.set_waypoint(21)
+        self.area_c_state = AreaCState.SCAN_C_QR
+
+    def handle_c_scan_c_qr(self):
+        """扫描C区二维码"""
+        if self.has_arrived and len(self.b_qr_data) > 0:
+            self.area_c_state = AreaCState.PLAN_TASKS
+
     def handle_c_plan_tasks(self):
         """规划C区任务"""
         self.c_task_list = self.replan_c_task()
@@ -380,6 +385,43 @@ class StateMachineNode:
         if len(self.c_task_list) > 0:
             self.area_c_state = AreaCState.NAVIGATE_TO_TARGET
         else:
+            self.area_c_state = AreaCState.COMPLETED
+
+    def handle_c_navigate(self):
+        # 前往第n个航点
+        self.set_waypoint(self.c_task_list[0])
+        self.c_current_index = 0
+        if self.has_arrived:
+            self.area_c_state = AreaCState.EXECUTE_GRAB
+
+    def handle_c_execute_grab(self):
+        # 获取当前任务的观测位模式
+        obs_mode = self.guancewei
+        self.task_state = TaskState.SETTING_OBSERVATION
+        # 执行通用观测+抓取流程
+        if self.execute_observation_task(obs_mode) and self.execute_grab_action():
+            self.area_c_state = AreaCState.MOVE_TO_NEXT_TARGET
+            self.c_current_index = 1
+        else:
+            self.area_c_state = AreaCState.MOVE_TO_NEXT_TARGET
+            self.c_current_index = 1
+
+    def handle_c_move_to_next(self):
+        self.c_task_list = self.c_task_list[self.c_current_index:]
+        if len(self.c_task_list) > 0:
+            self.area_c_state = AreaCState.NAVIGATE_TO_TARGET
+        else:
+            self.area_c_state = AreaCState.DUMP_FRUITS
+
+    def handle_c_dump_fruits(self):
+        self.set_waypoint(36)
+        if self.has_arrived:
+            self.arm_pub.publish("动作组:n;") # dump fruit cmd
+            self.area_c_state = AreaCState.RETURN_TO_START
+
+    def handle_c_return(self):
+        self.set_waypoint(21)
+        if self.has_arrived:
             self.area_c_state = AreaCState.COMPLETED
 
     # =================== B区状态处理 ===================
@@ -393,6 +435,7 @@ class StateMachineNode:
             self.handle_b_move_to_next()
         elif self.area_b_state == AreaBState.COMPLETED:
             self.transition_to_finished()
+
 
     # =================== 通用任务执行 ===================
     def execute_observation_task(self, observation_pos):
