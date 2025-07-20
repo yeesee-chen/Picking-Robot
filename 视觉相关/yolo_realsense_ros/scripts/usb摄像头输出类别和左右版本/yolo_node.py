@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-YOLOv5水果检测ROS节点 - 2D坐标左右转动版
+YOLOv5水果检测ROS节点 - 2D坐标左右转动版 + 垂直位置判断
 功能：
 1. 根据目标中心点位（2d坐标），判断x坐标是否在中间位置，
 如果在，那么返回"停止"，如果偏左，那么返回"左"如果偏右，返回"右"
-2. 只发布标签和判断坐标位置信息，将这两个信息分开发布到/fruit_class_ripeness和/fruit_move_msg
+2. 只发布标签和判断坐标位置信息，将这两个信息分开发布到/fruit_class_ripeness和/vertical_move
+3. 新增：根据目标中心点y坐标判断垂直位置（偏上/偏下/停止），发送到/level_move
 """
 
 import rospy
@@ -62,9 +63,13 @@ class OptimizedYoloNode:
 
         # 已删除稳定性和发布控制参数
 
-        # 2D坐标位置判断参数
+        # 2D坐标位置判断参数 - 水平方向
         self.center_tolerance = rospy.get_param('~center_tolerance', 50)  # 中心区域容忍度（像素）
         self.image_center_x = self.expected_width // 2  # 图像中心x坐标
+
+        # 新增：垂直方向位置判断参数
+        self.vertical_tolerance = rospy.get_param('~vertical_tolerance', 60)  # 垂直中心区域容忍度（像素）
+        self.image_center_y = self.expected_height // 2  # 图像中心y坐标
 
         # 水果类别与标签id映射
         self.fruit_maturity_mapping = {
@@ -105,7 +110,8 @@ class OptimizedYoloNode:
         self.class_ripeness_pub = rospy.Publisher('/fruit_class_ripeness', String, queue_size=10)
 
         # 移动指令发布者
-        self.move_msg_pub = rospy.Publisher('/fruit_move_msg', String, queue_size=10)
+        self.vertical_move_pub = rospy.Publisher('/vertical_move', String, queue_size=10)
+        self.level_move_pub = rospy.Publisher('/level_move', String, queue_size=10)  # 垂直位置移动指令
 
         # 可视化图像发布者
         self.image_vis_pub = rospy.Publisher('/yolov5/vis', Image, queue_size=10)
@@ -190,15 +196,19 @@ class OptimizedYoloNode:
             # 获取类别名称
             class_name = self.fruit_maturity_mapping[cls_id]['name']
 
-            # 判断移动方向
-            move_direction = self._determine_move_direction(cx)
+            # 判断水平移动方向
+            horizontal_direction = self._determine_horizontal_move_direction(cx)
+
+            # 新增：判断垂直移动方向
+            vertical_direction = self._determine_vertical_move_direction(cy)
 
             # 创建检测结果
             detection_result = {
                 'center_x': cx,
                 'center_y': cy,
                 'class_ripeness': class_name,
-                'move_direction': move_direction,
+                'horizontal_direction': horizontal_direction,
+                'vertical_direction': vertical_direction,  # 新增垂直方向
                 'bbox': (x1, y1, x2, y2),
                 'confidence': conf
             }
@@ -222,8 +232,8 @@ class OptimizedYoloNode:
         leftmost_idx = np.argmin(detections[:, 0])
         return detections[leftmost_idx]
 
-    def _determine_move_direction(self, center_x):
-        """根据目标中心点x坐标判断移动方向"""
+    def _determine_horizontal_move_direction(self, center_x):
+        """根据目标中心点x坐标判断水平移动方向"""
         # 计算与图像中心的偏移
         offset = center_x - self.image_center_x
 
@@ -234,6 +244,18 @@ class OptimizedYoloNode:
         else:
             return "右"
 
+    def _determine_vertical_move_direction(self, center_y):
+        """根据目标中心点y坐标判断垂直移动方向"""
+        # 计算与图像中心的偏移
+        offset = center_y - self.image_center_y
+
+        if abs(offset) <= self.vertical_tolerance:
+            return "停止"
+        elif offset < -self.vertical_tolerance:
+            return "上"  # y坐标小于中心，目标在上方
+        else:
+            return "下"  # y坐标大于中心，目标在下方
+
     def _publish_detection_result(self, detection_result):
         """发布检测结果"""
         # 总是发布类别和成熟度信息
@@ -243,11 +265,18 @@ class OptimizedYoloNode:
 
         # 只有标签以_0结尾的才发布移动指令
         if detection_result['class_ripeness'].endswith('_0'):
-            move_msg = String()
-            move_msg.data = detection_result['move_direction']
-            self.move_msg_pub.publish(move_msg)
+            # 发布水平移动指令
+            horizontal_move_msg = String()
+            horizontal_move_msg.data = detection_result['horizontal_direction']
+            self.vertical_move_pub.publish(horizontal_move_msg)
+
+            # 新增：发布垂直移动指令
+            vertical_move_msg = String()
+            vertical_move_msg.data = detection_result['vertical_direction']
+            self.level_move_pub.publish(vertical_move_msg)
+
             rospy.loginfo(
-                f"发布移动指令: {detection_result['move_direction']} (类别: {detection_result['class_ripeness']})")
+                f"发布移动指令 - 水平: {detection_result['horizontal_direction']}, 垂直: {detection_result['vertical_direction']} (类别: {detection_result['class_ripeness']})")
         else:
             rospy.loginfo(f"检测到 {detection_result['class_ripeness']}，不发布移动指令")
 
@@ -256,15 +285,25 @@ class OptimizedYoloNode:
         try:
             vis_img = bgr_img.copy()
 
-            # 绘制图像中心线和容忍区域
+            # 绘制水平中心线和容忍区域
             center_x = self.image_center_x
-            # 绘制中心线
+            # 绘制水平中心线
             cv2.line(vis_img, (center_x, 0), (center_x, vis_img.shape[0]), (255, 255, 0), 2)
-            # 绘制容忍区域
+            # 绘制水平容忍区域
             left_bound = center_x - self.center_tolerance
             right_bound = center_x + self.center_tolerance
             cv2.line(vis_img, (left_bound, 0), (left_bound, vis_img.shape[0]), (0, 255, 255), 1)
             cv2.line(vis_img, (right_bound, 0), (right_bound, vis_img.shape[0]), (0, 255, 255), 1)
+
+            # 新增：绘制垂直中心线和容忍区域
+            center_y = self.image_center_y
+            # 绘制垂直中心线
+            cv2.line(vis_img, (0, center_y), (vis_img.shape[1], center_y), (255, 0, 255), 2)  # 紫色
+            # 绘制垂直容忍区域
+            top_bound = center_y - self.vertical_tolerance
+            bottom_bound = center_y + self.vertical_tolerance
+            cv2.line(vis_img, (0, top_bound), (vis_img.shape[1], top_bound), (255, 0, 128), 1)  # 粉色
+            cv2.line(vis_img, (0, bottom_bound), (vis_img.shape[1], bottom_bound), (255, 0, 128), 1)
 
             # 绘制检测结果
             if len(detections) > 0 and detection_result:
@@ -289,19 +328,25 @@ class OptimizedYoloNode:
 
                 # 绘制移动方向信息（仅当会发布移动指令时显示）
                 if is_moveable:
-                    move_text = f"Direction: {detection_result['move_direction']}"
-                    cv2.putText(vis_img, move_text, (10, vis_img.shape[0] - 60), self.font, 0.6, (0, 255, 0), 2)
+                    horizontal_text = f"Horizontal: {detection_result['horizontal_direction']}"
+                    vertical_text = f"Vertical: {detection_result['vertical_direction']}"
+                    cv2.putText(vis_img, horizontal_text, (10, vis_img.shape[0] - 80), self.font, 0.6, (0, 255, 0), 2)
+                    cv2.putText(vis_img, vertical_text, (10, vis_img.shape[0] - 50), self.font, 0.6, (255, 0, 255), 2)
                 else:
                     no_move_text = "No movement command (not _0)"
-                    cv2.putText(vis_img, no_move_text, (10, vis_img.shape[0] - 60), self.font, 0.6, (128, 128, 128), 2)
+                    cv2.putText(vis_img, no_move_text, (10, vis_img.shape[0] - 65), self.font, 0.6, (128, 128, 128), 2)
 
                 # 绘制中心坐标信息
                 coord_text = f"Center: ({cx}, {cy})"
-                cv2.putText(vis_img, coord_text, (10, vis_img.shape[0] - 30), self.font, 0.5, (255, 255, 255), 1)
+                cv2.putText(vis_img, coord_text, (10, vis_img.shape[0] - 20), self.font, 0.5, (255, 255, 255), 1)
 
             # 绘制状态信息
             cv2.putText(vis_img, f"Status: {status}", (10, 30), self.font, 0.6, (0, 255, 0), 2)
             cv2.putText(vis_img, f"Position: {self.current_region}", (10, 60), self.font, 0.5, (255, 0, 0), 1)
+
+            # 新增：绘制参数信息
+            param_text = f"H_Tol: {self.center_tolerance}, V_Tol: {self.vertical_tolerance}"
+            cv2.putText(vis_img, param_text, (10, 90), self.font, 0.4, (255, 255, 255), 1)
 
             # 发布图像
             vis_msg = self.bridge.cv2_to_imgmsg(vis_img, "bgr8")
@@ -316,14 +361,14 @@ def main():
     """主函数"""
     try:
         node = OptimizedYoloNode()
-        rospy.loginfo("YOLOv5水果检测节点正在运行 - 2D坐标版...")
+        rospy.loginfo("YOLOv5水果检测节点正在运行 - 2D坐标版 + 垂直位置判断...")
         rospy.spin()
     except rospy.ROSInterruptException:
         rospy.loginfo("节点被用户中断")
     except Exception as e:
         rospy.logerr(f"节点运行异常: {str(e)}")
     finally:
-        rospy.loginfo("YOLOv5水果检测节点已关闭 - 2D坐标版")
+        rospy.loginfo("YOLOv5水果检测节点已关闭 - 2D坐标版 + 垂直位置判断")
 
 
 if __name__ == '__main__':
