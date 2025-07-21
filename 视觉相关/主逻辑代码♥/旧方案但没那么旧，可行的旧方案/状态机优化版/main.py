@@ -103,6 +103,7 @@ class StateMachineNode:
         # 二维码数据
         self.b_qr_data = []  # B区水果列表
         self.c_qr_data = []  # C区蔬菜列表
+        self.qr_data = ""
         self.c_number_sequence = ""  # C区数字序列
 
         # 视觉数据
@@ -144,7 +145,7 @@ class StateMachineNode:
         self.class_ripeness_sub = rospy.Subscriber('/fruit_class_ripeness', String, self.vision_class_callback)
         self.point_sub = rospy.Subscriber('/fruit_point', Point, self.vision_point_callback)
         self.arrive_sub = rospy.Subscriber('/weather_arrive', Int8, self.arrival_callback)
-        self.qr_sub = rospy.Subscriber('/qr_arm_message', String, self.qr_callback)
+        self.qr_sub = rospy.Subscriber('/qr_message', String, self.qr_callback)
 
         # 发布者
         self.arm_pub = rospy.Publisher('/arm_voice', String, queue_size=10)
@@ -164,8 +165,8 @@ class StateMachineNode:
         }
 
         # 超时配置
-        self.vision_timeout = 10.0  # 视觉识别超时
-        self.arrival_timeout = 30.0  # 导航到达超时
+        self.vision_timeout = 5.0  # 视觉识别超时
+        self.arrival_timeout = 5.0  # 导航到达超时
         self.action_timeout = 10.0  # 动作执行超时
 
         # 状态时间戳
@@ -197,6 +198,7 @@ class StateMachineNode:
     def qr_callback(self, msg):
         with self.data_lock:
             qr_data = msg.data.strip()
+            self.qr_data = qr_data
             if self.area_c_state == AreaCState.SCAN_B_QR:
                 self.process_b_qr_data(qr_data)
             elif self.area_c_state == AreaCState.SCAN_C_QR:
@@ -371,6 +373,7 @@ class StateMachineNode:
 
     def handle_c_scan_b_qr(self):
         """扫描B区二维码"""
+        self.process_b_qr_data(self.qr_data)
         if self.has_arrived and len(self.b_qr_data) > 0:
             self.area_c_state = AreaCState.GOTO_C_QR
 
@@ -381,7 +384,8 @@ class StateMachineNode:
 
     def handle_c_scan_c_qr(self):
         """扫描C区二维码"""
-        if self.has_arrived and len(self.b_qr_data) > 0:
+        self.process_c_qr_data(self.qr_data)
+        if self.has_arrived and len(self.c_qr_data) > 0:
             self.area_c_state = AreaCState.PLAN_TASKS
 
     def handle_c_plan_tasks(self):
@@ -455,9 +459,10 @@ class StateMachineNode:
         if self.b_current_index == 0 and self.current_waypoint_id == 20:
             # 第一次进入 B 区，跳到 19
             self.set_waypoint(19)
-            self.b_current_index = 0
-            self.area_b_state = AreaBState.SCAN_AND_GRAB
-            return
+            if self.has_arrived:
+                self.b_current_index = 0
+                self.area_b_state = AreaBState.SCAN_AND_GRAB
+                return
 
         if self.has_arrived:
             self.area_b_state = AreaBState.SCAN_AND_GRAB
@@ -586,13 +591,14 @@ class StateMachineNode:
             self.current_waypoint_id = waypoint_id
             self.has_arrived = False
             rospy.loginfo(f"设置新航点: {waypoint_id}")
+            self.id_pub_time = time.time()
 
     def publish_current_waypoint(self):
         """发布当前航点"""
         if self.current_waypoint_id != self.last_published_waypoint:
             self.waypoint_pub.publish(self.current_waypoint_id)
             self.last_published_waypoint = self.current_waypoint_id
-            self.id_pub_time = time.time()
+           
 
     def publish_vision_command(self):
         """发布视觉指令"""
@@ -638,6 +644,7 @@ class StateMachineNode:
         if current_time - self.state_start_time > 60:  # 总体超时保护
             rospy.logwarn("状态执行超时，可能需要人工干预")
         elif navigate_timeout: # 导航超时保护
+            self.has_arrived = 1
             rospy.logwarn("导航执行超时，手工设置航点标志位为1！")
 
     def generate_b_observation(self, waypoint):

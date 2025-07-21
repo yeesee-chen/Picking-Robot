@@ -11,25 +11,13 @@ def replan_c_task(test_strings):
     global c_now_id
     if not test_strings:
         return []
-
     parts = test_strings.split(',')
-
     # 验证输入格式
     try:
         sequence = [int(x) for x in parts]
     except ValueError:
         print("错误：输入包含非数字字符")
         return []
-
-    # 验证数字范围
-    if not all(1 <= x <= 12 for x in sequence):
-        print("错误：数字必须在1-12范围内")
-        return []
-
-    if len(sequence) != 8:
-        print("错误：序列长度必须为8")
-        return []
-
     result = []
     flag = 0  # 用于跟踪某种状态
 
@@ -159,7 +147,7 @@ def test_replan_function():
     test_cases = [
         "1,5,7,6,3,4,11,10",
         "2,4,7,10,3,8,12,11",
-        "7,5,1,4,9,10,6,2"
+        "4,3,1,10,8,9,2,11"
     ]
 
     for i, test_string in enumerate(test_cases, 1):
