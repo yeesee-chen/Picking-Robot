@@ -438,7 +438,7 @@ class StateMachineNode:
 
     def handle_b_navigate(self):
         """前往当前 B 区航点"""
-        if self.b_current_index == 0 and self.current_waypoint_id != 19:
+        if self.b_current_index == 0 and self.current_waypoint_id == 20:
             # 第一次进入 B 区，跳到 19
             self.set_waypoint(19)
             self.b_current_index = 0
@@ -454,26 +454,20 @@ class StateMachineNode:
         wp = self.b_waypoint_list[idx]
         expected = self.b_qr_data[self.b_qr_indices[idx]]
 
-        # 等待视觉
         self.task_state = TaskState.SETTING_OBSERVATION
-        self.arm_pub.publish(f"观测位:{self.generate_b_observation(wp)};")
-        self.receive_vision_once()
-
-        # 判断类别并抓取
-        if self.should_grab_fruit() and self.fruit_class == expected:
+        if self.execute_observation_task(self.generate_b_observation(wp)) and self.fruit_class == expected:
             self.execute_grab_action()
         else:
             self.arm_pub.publish("动作组:0;")
             rospy.sleep(1)
 
-        self.reset_vision_data()
         self.area_b_state = AreaBState.MOVE_TO_NEXT
 
     def handle_b_move_to_next(self):
         """移动到下一条目"""
         self.b_current_index += 1
         #列表逻辑
-        if self.b_current_index >= len(self.b_waypoint_list):
+        if self.b_current_index >= 7:
             self.area_b_state = AreaBState.COMPLETED
         else:
             self.set_waypoint(self.b_waypoint_list[self.b_current_index])
