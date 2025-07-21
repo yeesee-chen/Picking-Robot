@@ -128,11 +128,12 @@ class StateMachineNode:
         self.b_waypoint_list = [19, 15, 18, 14, 17, 13, 16, 12]
         self.b_qr_indices = [7, 3, 6, 2, 5, 1, 4, 0]
         self.b_current_index = 0
+        self.b_guancewei = 0
 
         # C区特定
         self.c_task_list = []
         self.c_current_index = 0
-        self.guancewei = 0 # 观测位模式
+        self.c_guancewei = [] # 观测位模式
 
         # 线程锁
         self.data_lock = threading.Lock()
@@ -169,6 +170,7 @@ class StateMachineNode:
 
         # 状态时间戳
         self.state_start_time = time.time()
+        self.id_pub_time = time.time()
 
     # =================== 回调函数 ===================
     def vision_class_callback(self, msg):
@@ -311,6 +313,8 @@ class StateMachineNode:
             if self.should_grab_fruit():
                 self.area_a_state = AreaAState.GRAB_FRUIT
             else:
+                self.arm_pub.publish("动作组:0;")
+                rospy.sleep(1)
                 self.area_a_state = AreaAState.MOVE_TO_NEXT
 
     def handle_a_grab_fruit(self):
@@ -320,6 +324,8 @@ class StateMachineNode:
                 self.current_observation_side = 1
                 self.area_a_state = AreaAState.OBSERVE_RIGHT
             else:
+                self.arm_pub.publish("动作组:0;")
+                rospy.sleep(1)
                 self.area_a_state = AreaAState.MOVE_TO_NEXT
 
     def handle_a_move_to_next(self):
@@ -396,18 +402,26 @@ class StateMachineNode:
 
     def handle_c_execute_grab(self):
         # 获取当前任务的观测位模式
-        obs_mode = self.guancewei
+        obs_mode = self.c_guancewei
         self.task_state = TaskState.SETTING_OBSERVATION
         # 执行通用观测+抓取流程
-        if self.execute_observation_task(obs_mode) and self.execute_grab_action():
-            self.area_c_state = AreaCState.MOVE_TO_NEXT_TARGET
-            self.c_current_index = 1
+        if obs_mode[0] != 0:
+            success = self.execute_observation_task(obs_mode[0])  # 右侧观测位
+            if success:
+                if self.should_grab_fruit():
+                    self.execute_grab_action()
+                else:
+                    self.arm_pub.publish("动作组:0;")
+                    rospy.sleep(1)
         else:
-            self.area_c_state = AreaCState.MOVE_TO_NEXT_TARGET
-            self.c_current_index = 1
+            self.arm_pub.publish("动作组:0;")
+            rospy.sleep(1)
+        self.area_c_state = AreaCState.MOVE_TO_NEXT_TARGET
+        self.c_current_index = 1
 
     def handle_c_move_to_next(self):
         self.c_task_list = self.c_task_list[self.c_current_index:]
+        self.c_guancewei = self.c_guancewei[self.c_current_index:]
         if len(self.c_task_list) > 0:
             self.area_c_state = AreaCState.NAVIGATE_TO_TARGET
         else:
@@ -455,8 +469,15 @@ class StateMachineNode:
         expected = self.b_qr_data[self.b_qr_indices[idx]]
 
         self.task_state = TaskState.SETTING_OBSERVATION
-        if self.execute_observation_task(self.generate_b_observation(wp)) and self.fruit_class == expected:
-            self.execute_grab_action()
+        self.b_guancewei = self.generate_b_observation(wp)
+        if self.fruit_class == expected:
+            success = self.execute_observation_task(wp)
+            if success:
+                if self.should_grab_fruit():
+                    self.execute_grab_action()
+                else:
+                    self.arm_pub.publish("动作组:0;")
+                    rospy.sleep(1)
         else:
             self.arm_pub.publish("动作组:0;")
             rospy.sleep(1)
@@ -571,6 +592,7 @@ class StateMachineNode:
         if self.current_waypoint_id != self.last_published_waypoint:
             self.waypoint_pub.publish(self.current_waypoint_id)
             self.last_published_waypoint = self.current_waypoint_id
+            self.id_pub_time = time.time()
 
     def publish_vision_command(self):
         """发布视觉指令"""
@@ -612,8 +634,11 @@ class StateMachineNode:
     def check_timeouts(self):
         """检查各种超时"""
         current_time = time.time()
+        navigate_timeout = current_time - self.id_pub_time > self.arrival_timeout and self.has_arrived == 0
         if current_time - self.state_start_time > 60:  # 总体超时保护
             rospy.logwarn("状态执行超时，可能需要人工干预")
+        elif navigate_timeout: # 导航超时保护
+            rospy.logwarn("导航执行超时，手工设置航点标志位为1！")
 
     def generate_b_observation(self, waypoint):
         if waypoint in {16, 17, 18, 19}:  # 左侧
@@ -621,13 +646,6 @@ class StateMachineNode:
         elif waypoint in {12, 13, 14, 15}:  # 右侧
             return 4
         return 0
-
-    def receive_vision_once(self):
-        """一次性获取视觉结果，带超时"""
-        timeout = 50
-        while timeout and (self.fruit_class is None or self.fruit_point is None):
-            rospy.sleep(0.1)
-            timeout -= 1
 
     # =================== 数据处理函数 ===================
     def process_b_qr_data(self, qr_data):
@@ -650,7 +668,24 @@ class StateMachineNode:
     def generate_ggwp_value(self):
         """生成视觉识别指令"""
         # 根据当前航点和状态生成相应的视觉指令
-        # 这里需要根据您的具体需求实现
+        if self.system_state == SystemState.AREA_A:
+            if self.area_a_state == AreaAState.OBSERVE_LEFT:
+                return 1
+            elif self.area_a_state == AreaAState.OBSERVE_RIGHT:
+                return 2
+            else:
+                return 0
+        elif self.system_state == SystemState.AREA_B:
+            if self.area_b_state == AreaBState.SCAN_AND_GRAB:
+                return self.b_guancewei
+            else:
+                return 0
+        elif self.system_state == SystemState.AREA_C:
+            if self.area_c_state == AreaCState.EXECUTE_GRAB:
+                ggwp = self.c_guancewei + 4
+                return ggwp
+            else:
+                return 0
         return 0
 
     def replan_c_task(self):
@@ -678,6 +713,7 @@ class StateMachineNode:
             return []
 
         result = []
+        c_guancewei = []
         flag = 0  # 用于跟踪某种状态
 
         # 判断起始位置：1-4为右边，5-12为左边
@@ -699,45 +735,46 @@ class StateMachineNode:
                 # 如果当前在右边且之前flag为0，则添加特殊指令
                 if flag == 0 and flag11 == 1:
                     result.append(20)
+                    c_guancewei.append(0)
                     flag = 1
 
                 if c_next and c_next in (1, 2, 3, 4, 5, 6, 7, 8):
                     if flag11 == 1:  # 在右边
                         c_now_id = c_now + 23
                         if c_now in (1, 2, 3, 4):
-                            self.guancewei = 2
+                            c_guancewei.append(2)
                         elif c_now in (5, 6, 7, 8):
                             if c_now_id in (28, 29, 30, 31):
-                                self.guancewei = 1
+                                c_guancewei.append(1)
                             else:
-                                self.guancewei = 2
+                                c_guancewei.append(2)
                         else:
-                            self.guancewei = 1
+                            c_guancewei.append(1)
                         result.append(c_now_id)
                     else:  # 在左边
                         if c_now in (1, 2, 3, 4):
                             c_now_id = c_now + 23
                             if c_now in (1, 2, 3, 4):
-                                self.guancewei = 2
+                                c_guancewei.append(2)
                             elif c_now in (5, 6, 7, 8):
                                 if c_now_id in (28, 29, 30, 31):
-                                    self.guancewei = 1
+                                    c_guancewei.append(1)
                                 else:
-                                    self.guancewei = 2
+                                    c_guancewei.append(2)
                             else:
-                                self.guancewei = 1
+                                c_guancewei.append(1)
                             result.append(c_now_id)
                         elif c_now in (5, 6, 7, 8):
                             c_now_id = c_now + 27
                             if c_now in (1, 2, 3, 4):
-                                self.guancewei = 2
+                                c_guancewei.append(2)
                             elif c_now in (5, 6, 7, 8):
                                 if c_now_id in (28, 29, 30, 31):
-                                    self.guancewei = 1
+                                    c_guancewei.append(1)
                                 else:
-                                    self.guancewei = 2
+                                    c_guancewei.append(2)
                             else:
-                                self.guancewei = 1
+                                c_guancewei.append(1)
                             result.append(c_now_id)
                             if c_next in (1, 2, 3, 4):
                                 result.extend([21, 20])
@@ -745,29 +782,30 @@ class StateMachineNode:
                 elif c_next and c_next in (9, 10, 11, 12):
                     c_now_id = c_now + 23
                     if c_now in (1, 2, 3, 4):
-                        self.guancewei = 2
+                        c_guancewei.append(2)
                     elif c_now in (5, 6, 7, 8):
                         if c_now_id in (28, 29, 30, 31):
-                            self.guancewei = 1
+                            c_guancewei.append(1)
                         else:
-                            self.guancewei = 2
+                            c_guancewei.append(2)
                     else:
-                        self.guancewei = 1
+                        c_guancewei.append(1)
                     result.extend([c_now_id, 20, 21])
+                    c_guancewei.extend([0, 0])
 
                 else:
                     # 处理序列末尾的情况
                     if c_next is None:
                         c_now_id = c_now + 23
                         if c_now in (1, 2, 3, 4):
-                            self.guancewei = 2
+                            c_guancewei.append(2)
                         elif c_now in (5, 6, 7, 8):
                             if c_now_id in (28, 29, 30, 31):
-                                self.guancewei = 1
+                                c_guancewei.append(1)
                             else:
-                                self.guancewei = 2
+                                c_guancewei.append(2)
                         else:
-                            self.guancewei = 1
+                            c_guancewei.append(1)
                         result.append(c_now_id)
                     else:
                         rospy.loginfo(f"未处理的情况：位置{i}，当前值{c_now}")
@@ -776,19 +814,20 @@ class StateMachineNode:
             elif c_now in (9, 10, 11, 12):
                 c_now_id = c_now + 23
                 if c_now in (1, 2, 3, 4):
-                    self.guancewei = 2
+                    c_guancewei.append(2)
                 elif c_now in (5, 6, 7, 8):
                     if c_now_id in (28, 29, 30, 31):
-                        self.guancewei = 1
+                        c_guancewei.append(1)
                     else:
-                        self.guancewei = 2
+                        c_guancewei.append(2)
                 else:
-                    self.guancewei = 1
+                    c_guancewei.append(1)
                 result.append(c_now_id)
 
                 if c_next:
                     if c_next in (1, 2, 3, 4):
                         result.extend([21, 20])
+                        c_guancewei.extend([0, 0])
                     elif c_next in (5, 6, 7, 8):
                         pass  # 不需要额外操作
                     # 对于c_next in (9, 10, 11, 12)的情况，不需要额外操作
@@ -796,7 +835,7 @@ class StateMachineNode:
             else:
                 rospy.logdebug(f"警告：位置{i}的值{c_now}超出有效范围")
                 return result
-
+        self.c_guancewei = c_guancewei
         return result
 
 
