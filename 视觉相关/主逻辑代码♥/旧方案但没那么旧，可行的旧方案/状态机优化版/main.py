@@ -682,8 +682,11 @@ class StateMachineNode:
                 return 0
         elif self.system_state == SystemState.AREA_C:
             if self.area_c_state == AreaCState.EXECUTE_GRAB:
-                ggwp = self.c_guancewei + 4
-                return ggwp
+                ggwp = self.c_guancewei[0]
+                if ggwp != 0:
+                    return ggwp
+                else:
+                    return 0
             else:
                 return 0
         return 0
