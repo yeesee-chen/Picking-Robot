@@ -134,7 +134,7 @@ class StateMachineNode:
         # C区特定
         self.c_task_list = []
         self.c_current_index = 0
-        self.c_guancewei = [] # 观测位模式
+        self.c_obs_list = [] # 观测位模式
 
         # 线程锁
         self.data_lock = threading.Lock()
@@ -390,7 +390,7 @@ class StateMachineNode:
 
     def handle_c_plan_tasks(self):
         """规划C区任务"""
-        self.c_task_list = self.replan_c_task()
+        self.c_task_list, self.c_obs_list = self.replan_c_task(self.c_number_sequence)
         self.c_current_index = 0
         if len(self.c_task_list) > 0:
             self.area_c_state = AreaCState.NAVIGATE_TO_TARGET
@@ -406,7 +406,7 @@ class StateMachineNode:
 
     def handle_c_execute_grab(self):
         # 获取当前任务的观测位模式
-        obs_mode = self.c_guancewei
+        obs_mode = self.c_obs_list
         self.task_state = TaskState.SETTING_OBSERVATION
         # 执行通用观测+抓取流程
         if obs_mode[0] != 0:
@@ -425,7 +425,7 @@ class StateMachineNode:
 
     def handle_c_move_to_next(self):
         self.c_task_list = self.c_task_list[self.c_current_index:]
-        self.c_guancewei = self.c_guancewei[self.c_current_index:]
+        self.c_obs_list = self.c_obs_list[self.c_current_index:]
         if len(self.c_task_list) > 0:
             self.area_c_state = AreaCState.NAVIGATE_TO_TARGET
         else:
@@ -689,7 +689,7 @@ class StateMachineNode:
                 return 0
         elif self.system_state == SystemState.AREA_C:
             if self.area_c_state == AreaCState.EXECUTE_GRAB:
-                ggwp = self.c_guancewei[0]
+                ggwp = self.c_obs_list[0]
                 if ggwp != 0:
                     return ggwp
                 else:
@@ -698,155 +698,103 @@ class StateMachineNode:
                 return 0
         return 0
 
-    def replan_c_task(self):
-        """重新规划C区任务"""
-        test_strings = self.c_number_sequence
-        if not test_strings:
-            return []
+    def replan_c_task(self, position_str):
+        """
+        将位置编号字符串转换为对应的点位顺序和观察状态
 
-        parts = test_strings.split(',')
+        参数:
+        position_str: 位置编号字符串，如 "1,6,10,3,2,5,7,8"
 
-        # 验证输入格式
-        try:
-            sequence = [int(x) for x in parts]
-        except ValueError:
-            print("错误：输入包含非数字字符")
-            return []
+        返回:
+        tuple: (点位顺序列表, 观察状态列表)
+        观察状态说明:
+        - 0: 目标点位为20,21时
+        - 1: 目标位置为1-4时，或目标位置为5-8且点位在32-35之间时
+        - 2: 目标位置为9-12时，或目标位置为5-8且点位在24-27之间时
+        """
+        # 解析输入字符串
+        positions = [int(x.strip()) for x in position_str.split(',')]
 
-        # 验证数字范围
-        if not all(1 <= x <= 12 for x in sequence):
-            print("错误：数字必须在1-12范围内")
-            return []
+        # 基本映射规则
+        basic_mapping = {
+            1: 24, 2: 25, 3: 26, 4: 27,
+            9: 32, 10: 33, 11: 34, 12: 35
+        }
 
-        if len(sequence) != 8:
-            print("错误：序列长度必须为8")
-            return []
+        # 模糊位置的两种选择
+        ambiguous_mapping = {
+            5: (24, 32),
+            6: (25, 33),
+            7: (26, 34),
+            8: (27, 35)
+        }
 
         result = []
-        c_guancewei = []
-        flag = 0  # 用于跟踪某种状态
+        obs_result = []
+        last_target = None
 
-        # 判断起始位置：1-4为右边，5-12为左边
-        def is_right_side(pos):
-            return pos in (1, 2, 3, 4)
+        def get_current_obs(position, point):
+            """根据位置和点位计算观察状态"""
+            if point in [20, 21]:
+                return 0
+            elif position in [1, 2, 3, 4]:
+                return 1
+            elif position in [9, 10, 11, 12]:
+                return 2
+            elif position in [5, 6, 7, 8]:
+                if 24 <= point <= 27:
+                    return 2
+                elif 32 <= point <= 35:
+                    return 1
+            return 0  # 默认值
 
-        def is_left_side(pos):
-            return pos in (5, 6, 7, 8, 9, 10, 11, 12)
+        # 如果第一个位置在1-4中，先加20
+        if positions[0] in [1, 2, 3, 4]:
+            result.append(20)
+            obs_result.append(0)  # 点位20对应观察状态0
 
-        # 确定初始方向标志
-        flag11 = 1 if is_right_side(sequence[0]) else 0
+        for i, pos in enumerate(positions):
+            current_target = None
 
-        for i in range(len(sequence)):
-            c_now = sequence[i]
-            c_next = sequence[i + 1] if i < len(sequence) - 1 else None
+            # 处理基本映射
+            if pos in basic_mapping:
+                current_target = basic_mapping[pos]
 
-            # 处理位置1-8的情况
-            if c_now in (1, 2, 3, 4, 5, 6, 7, 8):
-                # 如果当前在右边且之前flag为0，则添加特殊指令
-                if flag == 0 and flag11 == 1:
-                    result.append(20)
-                    c_guancewei.append(0)
-                    flag = 1
+            # 处理模糊位置
+            elif pos in ambiguous_mapping:
+                option1, option2 = ambiguous_mapping[pos]
 
-                if c_next and c_next in (1, 2, 3, 4, 5, 6, 7, 8):
-                    if flag11 == 1:  # 在右边
-                        c_now_id = c_now + 23
-                        if c_now in (1, 2, 3, 4):
-                            c_guancewei.append(2)
-                        elif c_now in (5, 6, 7, 8):
-                            if c_now_id in (28, 29, 30, 31):
-                                c_guancewei.append(1)
-                            else:
-                                c_guancewei.append(2)
-                        else:
-                            c_guancewei.append(1)
-                        result.append(c_now_id)
-                    else:  # 在左边
-                        if c_now in (1, 2, 3, 4):
-                            c_now_id = c_now + 23
-                            if c_now in (1, 2, 3, 4):
-                                c_guancewei.append(2)
-                            elif c_now in (5, 6, 7, 8):
-                                if c_now_id in (28, 29, 30, 31):
-                                    c_guancewei.append(1)
-                                else:
-                                    c_guancewei.append(2)
-                            else:
-                                c_guancewei.append(1)
-                            result.append(c_now_id)
-                        elif c_now in (5, 6, 7, 8):
-                            c_now_id = c_now + 27
-                            if c_now in (1, 2, 3, 4):
-                                c_guancewei.append(2)
-                            elif c_now in (5, 6, 7, 8):
-                                if c_now_id in (28, 29, 30, 31):
-                                    c_guancewei.append(1)
-                                else:
-                                    c_guancewei.append(2)
-                            else:
-                                c_guancewei.append(1)
-                            result.append(c_now_id)
-                            if c_next in (1, 2, 3, 4):
-                                result.extend([21, 20])
-
-                elif c_next and c_next in (9, 10, 11, 12):
-                    c_now_id = c_now + 23
-                    if c_now in (1, 2, 3, 4):
-                        c_guancewei.append(2)
-                    elif c_now in (5, 6, 7, 8):
-                        if c_now_id in (28, 29, 30, 31):
-                            c_guancewei.append(1)
-                        else:
-                            c_guancewei.append(2)
-                    else:
-                        c_guancewei.append(1)
-                    result.extend([c_now_id, 20, 21])
-                    c_guancewei.extend([0, 0])
-
+                if last_target is None:
+                    # 如果是第一个位置，默认选择第一组
+                    current_target = option1
+                elif 24 <= last_target <= 27:
+                    # 上一个在24-27组，选择24-27组的点位
+                    current_target = option1
+                elif 32 <= last_target <= 35:
+                    # 上一个在32-35组，选择32-35组的点位
+                    current_target = option2
                 else:
-                    # 处理序列末尾的情况
-                    if c_next is None:
-                        c_now_id = c_now + 23
-                        if c_now in (1, 2, 3, 4):
-                            c_guancewei.append(2)
-                        elif c_now in (5, 6, 7, 8):
-                            if c_now_id in (28, 29, 30, 31):
-                                c_guancewei.append(1)
-                            else:
-                                c_guancewei.append(2)
-                        else:
-                            c_guancewei.append(1)
-                        result.append(c_now_id)
-                    else:
-                        rospy.loginfo(f"未处理的情况：位置{i}，当前值{c_now}")
+                    # 其他情况默认选择第一组
+                    current_target = option1
 
-            # 处理位置9-12的情况
-            elif c_now in (9, 10, 11, 12):
-                c_now_id = c_now + 23
-                if c_now in (1, 2, 3, 4):
-                    c_guancewei.append(2)
-                elif c_now in (5, 6, 7, 8):
-                    if c_now_id in (28, 29, 30, 31):
-                        c_guancewei.append(1)
-                    else:
-                        c_guancewei.append(2)
-                else:
-                    c_guancewei.append(1)
-                result.append(c_now_id)
+            # 检查是否需要添加中间点位
+            if last_target is not None and current_target is not None:
+                # 从24-27前往32-35
+                if 24 <= last_target <= 27 and 32 <= current_target <= 35:
+                    result.extend([20, 21])
+                    obs_result.extend([0, 0])  # 中间点位都是观察状态0
+                # 从32-35前往24-27
+                elif 32 <= last_target <= 35 and 24 <= current_target <= 27:
+                    result.extend([21, 20])
+                    obs_result.extend([0, 0])  # 中间点位都是观察状态0
 
-                if c_next:
-                    if c_next in (1, 2, 3, 4):
-                        result.extend([21, 20])
-                        c_guancewei.extend([0, 0])
-                    elif c_next in (5, 6, 7, 8):
-                        pass  # 不需要额外操作
-                    # 对于c_next in (9, 10, 11, 12)的情况，不需要额外操作
+            # 添加当前目标点位和对应的观察状态
+            if current_target is not None:
+                result.append(current_target)
+                obs_result.append(get_current_obs(pos, current_target))
+                last_target = current_target
 
-            else:
-                rospy.logdebug(f"警告：位置{i}的值{c_now}超出有效范围")
-                return result
-        self.c_guancewei = c_guancewei
-        return result
+        return result, obs_result
 
 
 def main():

@@ -393,7 +393,7 @@ class OptimizedYoloNode:
             #     x_init, y_init, z_init = self.observation_positions[2]
 
             x_init, y_init, z_init = self.observation_positions[2]
-            flag = 1
+            flag = self.current_region
 
             # 位置1
             if flag == 1 :
@@ -408,7 +408,7 @@ class OptimizedYoloNode:
                 phi_deg = 180 + phi_deg - 7
 
             # 位置2
-            if flag == 2 :
+            elif flag == 2 :
                 x_base = x_init - x_cam
                 y_base = y_init + y_cam
                 z_base = -0.1
@@ -419,11 +419,28 @@ class OptimizedYoloNode:
                 phi_deg = phi_deg + 8.0
 
 
-            # # 处理位置3、4的相机旋转
-            # if self.current_region in (3, 4) :
-            #     x_cam = x_cam
-            #     y_cam = y_cam * 0.966
-            #     z_cam = z_cam * 0.966
+            # 处理位置3、4的相机旋转
+            elif flag == 3 :
+                x_cam = x_cam
+                y_cam = y_cam * 0.966
+                z_cam = z_cam * 0.966
+                x_base = x_init + x_cam
+                y_base = y_init - z_cam
+                z_base = z_init - y_cam
+                rho = np.sqrt(x_base ** 2 + y_base ** 2)
+                phi = np.arctan2(y_base, x_base)
+                phi_deg = np.degrees(phi)
+
+            elif flag == 4 :
+                x_cam = x_cam
+                y_cam = y_cam * 0.966
+                z_cam = z_cam * 0.966
+                x_base = x_init + x_cam
+                y_base = y_init + z_cam
+                z_base = z_init - y_cam
+                rho = np.sqrt(x_base ** 2 + y_base ** 2)
+                phi = np.arctan2(y_base, x_base)
+                phi_deg = np.degrees(phi)
 
             # 转换为圆柱坐标系
             
