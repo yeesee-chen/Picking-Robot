@@ -475,8 +475,9 @@ class StateMachineNode:
 
         self.task_state = TaskState.SETTING_OBSERVATION
         self.b_guancewei = self.generate_b_observation(wp)
+        observation_b = self.b_guancewei
         if self.fruit_class == expected:
-            success = self.execute_observation_task(wp)
+            success = self.execute_observation_task(observation_b)
             if success:
                 if self.should_grab_fruit():
                     self.execute_grab_action()
