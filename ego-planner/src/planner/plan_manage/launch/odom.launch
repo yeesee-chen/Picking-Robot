@@ -1,0 +1,23 @@
+<launch>
+
+
+    <!-- <arg name="waypoint_file" default="$(find ego_planner)/config/waypoint_file.txt" />
+    <arg name="visualization" default="true" />
+  
+
+    <node pkg="ego_planner" type="interactive_waypoint_publisher" name="waypoint_publisher" output="screen">
+
+        <param name="waypoint_file" value="$(arg waypoint_file)" />
+    </node>
+    <node pkg="ego_planner" type="odom" name="odom">
+        <param name="maxForwardSpeed" value="1,0"/>
+        <param name="maxBackwardSpeed" value="-1.0"/>
+        <param name="maxYawRate" value="1.5"/>
+        <param name="stopDisThre" value="0.05"/>
+        <param name="yawTolerance" value="5"/>
+    </node>
+
+    <include file="$(find ego_planner)/launch/rviz.launch"/> -->
+
+    <node pkg="tf" type="static_transform_publisher" name="vehicleTrans" args="0 0 0 0 0 0 /sensor /vehicle 1000"/>
+</launch>
