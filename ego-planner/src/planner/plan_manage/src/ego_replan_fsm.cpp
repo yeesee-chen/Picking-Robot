@@ -1,4 +1,4 @@
-PI
+
 #include <plan_manage/ego_replan_fsm.h>
 
 #define PI 3.1415926
@@ -69,56 +69,75 @@ namespace ego_planner
       cout << "Wrong target_type_ value! target_type_=" << target_type_ << endl;
   }
 
+  /**
+   * @brief 根据给定的航点规划全局轨迹
+   * 
+   * 该函数从参数中获取预设的航点，调用规划管理器的方法进行全局轨迹规划，
+   * 并显示航点和规划好的全局轨迹。若规划成功，更新目标信息并进行有限状态机状态转换；
+   * 若规划失败，输出错误信息。
+   */
   void EGOReplanFSM::planGlobalTrajbyGivenWps()
   {
-    //参数中获取航点
+    // 从参数中获取航点，存储到 wps 向量中
     std::vector<Eigen::Vector3d> wps(waypoint_num_);
     for (int i = 0; i < waypoint_num_; i++)
     {
+      // 将每个航点的 x、y、z 坐标赋值给 wps 向量中的对应元素
       wps[i](0) = waypoints_[i][0];
       wps[i](1) = waypoints_[i][1];
       wps[i](2) = waypoints_[i][2];
 
+      // 将最后一个航点设置为终点
       end_pt_ = wps.back();
     }
-    //调用planner_manager_的planGlobalTrajWaypoints方法规划全局轨迹
+    // 调用 planner_manager_ 的 planGlobalTrajWaypoints 方法进行全局轨迹规划
+    // 传入当前里程计位置、初始速度、初始加速度、航点列表、终点速度和终点加速度
     bool success = planner_manager_->planGlobalTrajWaypoints(odom_pos_, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), wps, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
-    //显示航点
+    // 显示所有航点
     for (size_t i = 0; i < (size_t)waypoint_num_; i++)
     {
+      // 调用可视化工具显示每个航点，颜色为青绿色，半径 0.3，编号为 i
       visualization_->displayGoalPoint(wps[i], Eigen::Vector4d(0, 0.5, 0.5, 1), 0.3, i);
+      // 短暂休眠，避免显示过快
       ros::Duration(0.001).sleep();
     }
 
     if (success)
     {
-
-      /*** display ***/
+      /*** 显示全局轨迹 ***/
+      // 定义采样时间步长为 0.1 秒
       constexpr double step_size_t = 0.1;
+      // 计算采样点数量
       int i_end = floor(planner_manager_->global_data_.global_duration_ / step_size_t);
+      // 存储采样点的向量
       std::vector<Eigen::Vector3d> gloabl_traj(i_end);
+      // 遍历每个采样点，计算全局轨迹上对应时间点的位置
       for (int i = 0; i < i_end; i++)
       {
         gloabl_traj[i] = planner_manager_->global_data_.global_traj_.evaluate(i * step_size_t);
       }
 
+      // 设置终点速度为零向量
       end_vel_.setZero();
+      // 标记已获取目标点
       have_target_ = true;
+      // 标记有新的目标点
       have_new_target_ = true;
 
-      /*** FSM ***/
-      // if (exec_state_ == WAIT_TARGET)
+      /*** 有限状态机处理 ***/
+      // 切换到生成新轨迹状态，触发原因为 "TRIG"
       changeFSMExecState(GEN_NEW_TRAJ, "TRIG");
-      // else if (exec_state_ == EXEC_TRAJ)
-      //   changeFSMExecState(REPLAN_TRAJ, "TRIG");
 
-      // visualization_->displayGoalPoint(end_pt_, Eigen::Vector4d(1, 0, 0, 1), 0.3, 0);
+      // 短暂休眠，避免显示过快
       ros::Duration(0.001).sleep();
+      // 显示全局轨迹，线宽 0.1，编号 0
       visualization_->displayGlobalPathList(gloabl_traj, 0.1, 0);
+      // 短暂休眠，避免显示过快
       ros::Duration(0.001).sleep();
     }
     else
     {
+      // 若全局轨迹规划失败，输出错误信息
       ROS_ERROR("Unable to generate global trajectory!");
     }
   }
@@ -193,7 +212,7 @@ namespace ego_planner
       ROS_ERROR("Unable to generate global trajectory!");
     }
   }
-
+}
 /**
  * @brief 处理接收到的目标点消息，根据消息内容进行全局轨迹规划
  * 
@@ -1259,17 +1278,33 @@ void EGOReplanFSM::goal_callback(const geometry_msgs::PoseStamped::ConstPtr &msg
     return true;
   }
 
+  /**
+   * @brief 获取局部目标点及其速度
+   * 
+   * 该函数通过遍历全局轨迹，根据规划视野距离确定局部目标点，
+   * 并根据局部目标点与终点的距离计算局部目标速度。
+   */
   void EGOReplanFSM::getLocalTarget()
   {
+    // 定义时间变量，用于遍历全局轨迹
     double t;
 
+    // 计算时间步长，用于遍历全局轨迹
     double t_step = planning_horizen_ / 20 / planner_manager_->pp_.max_vel_;
-    double dist_min = 9999, dist_min_t = 0.0;
+    // 初始化最小距离为一个较大的值
+    double dist_min = 9999;
+    // 初始化最小距离对应的时间为 0
+    double dist_min_t = 0.0;
+
+    // 从全局轨迹的最后进度时间开始，以 t_step 为步长遍历全局轨迹
     for (t = planner_manager_->global_data_.last_progress_time_; t < planner_manager_->global_data_.global_duration_; t += t_step)
     {
+      // 获取当前时间 t 对应的全局轨迹上的位置
       Eigen::Vector3d pos_t = planner_manager_->global_data_.getPosition(t);
+      // 计算当前位置与起始点的距离
       double dist = (pos_t - start_pt_).norm();
 
+      // 检查最后进度时间是否异常，若异常则输出错误信息并返回
       if (t < planner_manager_->global_data_.last_progress_time_ + 1e-5 && dist > planning_horizen_)
       {
         // todo
@@ -1280,11 +1315,15 @@ void EGOReplanFSM::goal_callback(const geometry_msgs::PoseStamped::ConstPtr &msg
         ROS_ERROR("last_progress_time_ ERROR !!!!!!!!!");
         return;
       }
+
+      // 更新最小距离及其对应的时间
       if (dist < dist_min)
       {
         dist_min = dist;
         dist_min_t = t;
       }
+
+      // 若当前距离大于等于规划视野距离，设置局部目标点并更新最后进度时间
       if (dist >= planning_horizen_)
       {
         local_target_pt_ = pos_t;
@@ -1292,55 +1331,91 @@ void EGOReplanFSM::goal_callback(const geometry_msgs::PoseStamped::ConstPtr &msg
         break;
       }
     }
+
+    // 若遍历到全局轨迹结束，将局部目标点设置为终点
     if (t > planner_manager_->global_data_.global_duration_) // Last global point
     {
       local_target_pt_ = end_pt_;
     }
 
+    // 根据局部目标点与终点的距离计算局部目标速度
     if ((end_pt_ - local_target_pt_).norm() < (planner_manager_->pp_.max_vel_ * planner_manager_->pp_.max_vel_) / (2 * planner_manager_->pp_.max_acc_))
     {
+      // 原注释代码，可用于计算特定速度
       // local_target_vel_ = (end_pt_ - init_pt_).normalized() * planner_manager_->pp_.max_vel_ * (( end_pt_ - local_target_pt_ ).norm() / ((planner_manager_->pp_.max_vel_*planner_manager_->pp_.max_vel_)/(2*planner_manager_->pp_.max_acc_)));
       // cout << "A" << endl;
+      // 若距离较近，将局部目标速度设置为零向量
       local_target_vel_ = Eigen::Vector3d::Zero();
     }
     else
     {
+      // 若距离较远，将局部目标速度设置为全局轨迹上当前时间的速度
       local_target_vel_ = planner_manager_->global_data_.getVelocity(t);
       // cout << "AA" << endl;
     }
   }
 
+  /**
+   * @brief 发布 B 样条轨迹消息
+   * 
+   * 该函数从局部轨迹数据中提取 B 样条轨迹的相关信息，
+   * 包括阶数、起始时间、轨迹 ID、位置控制点和节点向量，
+   * 并将这些信息封装到 B 样条消息中进行发布。
+   */
   void EGOReplanFSM::publishBspline() {
-
+      // 获取局部轨迹数据的指针
       auto info = &planner_manager_->local_data_;
+      // 更新轨迹的起始时间为当前时间
       info->start_time_ = ros::Time::now();
+  
       /* publish traj */
+      // 创建一个 B 样条消息对象，用于存储并发布轨迹信息
       ego_planner::Bspline bspline;
+      // 设置 B 样条的阶数为 3
       bspline.order = 3;
+      // 设置 B 样条轨迹的起始时间
       bspline.start_time = info->start_time_;
+      // 设置 B 样条轨迹的 ID
       bspline.traj_id = info->traj_id_;
-
+  
+      // 获取位置轨迹的控制点
       Eigen::MatrixXd pos_pts = info->position_traj_.getControlPoint();
+      // 注释掉的代码，可用于输出最优控制点信息
       //cout<<"optimal point : "<<endl<<pos_pts<<endl;
+      // 为 B 样条消息的位置点数组预留空间
       bspline.pos_pts.reserve(pos_pts.cols());
+      // 临时向量，用于存储点的坐标（当前使用存在问题，仅为注释说明）
       Eigen::Vector3d point_temp;
+      // 遍历位置轨迹的控制点矩阵，将每个控制点添加到 B 样条消息的位置点数组中
       for (int i = 0; i < pos_pts.cols(); ++i)
       {
+          // 创建一个几何点对象
           geometry_msgs::Point pt;
+          // 设置点的 x 坐标
           pt.x = pos_pts(0, i);
+          // 设置点的 y 坐标
           pt.y = pos_pts(1, i);
+          // 设置点的 z 坐标为当前里程计的 z 坐标
           pt.z = odom_pos_(2);
+          // 将点添加到 B 样条消息的位置点数组中
           bspline.pos_pts.push_back(pt);
+          // 临时向量赋值，当前赋值存在问题（三个分量都为 x 坐标）
           point_temp<<pt.x,pt.x,pt.x;
+          // 注释掉的代码，可用于输出点的坐标信息
           //cout<<"point : "<<point_temp<<endl;
       }
-
+  
+      // 获取位置轨迹的节点向量
       Eigen::VectorXd knots = info->position_traj_.getKnot();
+      // 为 B 样条消息的节点数组预留空间
       bspline.knots.reserve(knots.rows());
+      // 遍历位置轨迹的节点向量，将每个节点添加到 B 样条消息的节点数组中
       for (int i = 0; i < knots.rows(); ++i)
       {
           bspline.knots.push_back(knots(i));
       }
+  
+      // 发布 B 样条消息
 
       bspline_pub_.publish(bspline);
   }
