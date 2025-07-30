@@ -1,0 +1,15 @@
+{
+    "python.autoComplete.extraPaths": [
+        "/home/boli/ego-planner/devel/lib/python3/dist-packages",
+        "/home/boli/far_planner/devel/lib/python3/dist-packages",
+        "/opt/ros/noetic/lib/python3/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/boli/ego-planner/devel/lib/python3/dist-packages",
+        "/home/boli/far_planner/devel/lib/python3/dist-packages",
+        "/opt/ros/noetic/lib/python3/dist-packages"
+    ],
+    "files.associations": {
+        "iostream": "cpp"
+    }
+}

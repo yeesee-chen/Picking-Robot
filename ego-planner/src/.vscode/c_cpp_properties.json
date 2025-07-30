@@ -1,0 +1,40 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/home/boli/ego-planner/devel/include/**",
+        "/home/boli/far_planner/devel/include/**",
+        "/opt/ros/noetic/include/**",
+        "/home/boli/far_planner/src/boundary_handler/include/**",
+        "/home/boli/ego-planner/src/planner/bspline_opt/include/**",
+        "/home/boli/ego-planner/src/planner/plan_manage/include/**",
+        "/home/boli/far_planner/src/far_planner/include/**",
+        "/home/boli/far_planner/src/goalpoint_rviz_plugin/include/**",
+        "/home/boli/far_planner/src/graph_decoder/include/**",
+        "/home/boli/ego-planner/src/uav_simulator/mockamap/include/**",
+        "/home/boli/ego-planner/src/uav_simulator/Utils/multi_map_server/include/**",
+        "/home/boli/ego-planner/src/planner/path_searching/include/**",
+        "/home/boli/ego-planner/src/planner/plan_env/include/**",
+        "/home/boli/ego-planner/src/uav_simulator/Utils/pose_utils/include/**",
+        "/home/boli/ego-planner/src/uav_simulator/Utils/quadrotor_msgs/include/**",
+        "/home/boli/ego-planner/src/uav_simulator/so3_control/include/**",
+        "/home/boli/ego-planner/src/uav_simulator/so3_quadrotor_simulator/include/**",
+        "/home/boli/ego-planner/src/planner/traj_utils/include/**",
+        "/home/boli/ego-planner/src/uav_simulator/Utils/uav_utils/include/**",
+        "/home/boli/autonomous_exploration_development_environment/src/velodyne_simulator/velodyne_gazebo_plugins/include/**",
+        "/home/boli/autonomous_exploration_development_environment/src/waypoint_rviz_plugin/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++14"
+    }
+  ],
+  "version": 4
+}

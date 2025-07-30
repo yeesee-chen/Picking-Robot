@@ -1,0 +1,12 @@
+<launch>
+
+    <!-- 基本参数配置 -->
+    <arg name="waypoint_file" default="$(find ego_planner)/config/waypoint_file.txt" />
+    <arg name="visualization" default="true" />
+  
+    <!-- 节点主配置 -->
+    <node pkg="ego_planner" type="interactive_waypoint_publisher" name="waypoint_publisher" output="screen">
+        <!-- 必须参数 -->
+        <param name="waypoint_file" value="$(arg waypoint_file)" />
+    </node>
+</launch>

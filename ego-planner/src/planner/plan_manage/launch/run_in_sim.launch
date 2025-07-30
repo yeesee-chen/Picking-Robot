@@ -1,0 +1,151 @@
+<launch>
+  <!-- size of map, change the size inflate x, y, z according to your application -->
+  <arg name="map_size_x" value="600"/>
+  <arg name="map_size_y" value="600"/>
+  <arg name="map_size_z" value=" 1.0"/>
+
+  <node pkg="ego_planner" type="transform_cloud" name="transform_cloud" output="screen" required="true">
+    <param name="stateEstimationTopic" type="string" value="/integrated_to_init" />
+    <param name="registeredScanTopic" type="string" value="/velodyne_cloud_registered" />
+  </node>
+
+  <node pkg="ego_planner" type="keybord" name="keybord" output="screen" required="true">
+  </node>
+
+  <node pkg="ego_planner" type="terrainAnalysis_1" name="terrainAnalysis_1" output="screen" required="true">
+    <param name="scanVoxelSize" type="double" value="0.05" />
+    <param name="decayTime" type="double" value="2.0" />
+    <param name="noDecayDis" type="double" value="4.0" />
+    <param name="clearingDis" type="double" value="8.0" />
+    <param name="useSorting" type="bool" value="false" />
+    <param name="quantileZ" type="double" value="0.25" />
+    <param name="considerDrop" type="bool" value="true" />
+    <param name="limitGroundLift" type="bool" value="false" />
+    <param name="maxGroundLift" type="double" value="0.15" />
+    <param name="clearDyObs" type="bool" value="true" />
+    <param name="minDyObsDis" type="double" value="0.3" />
+    <param name="minDyObsAngle" type="double" value="0" />
+    <param name="minDyObsRelZ" type="double" value="-0.5" />
+    <param name="absDyObsRelZThre" type="double" value="0.2" />
+    <param name="minDyObsVFOV" type="double" value="-16.0" />
+    <param name="maxDyObsVFOV" type="double" value="16.0" />
+    <param name="minDyObsPointNum" type="int" value="1" />
+    <param name="noDataObstacle" type="bool" value="false" />
+    <param name="noDataBlockSkipNum" type="int" value="0" />
+    <param name="minBlockPointNum" type="int" value="10" />
+    <param name="vehicleHeight" type="double" value="1.5" />
+    <param name="voxelPointUpdateThre" type="int" value="100" />
+    <param name="voxelTimeUpdateThre" type="double" value="2.0" />
+    <param name="minRelZ" type="double" value="-2.5" />
+    <param name="maxRelZ" type="double" value="1.0" />
+    <param name="disRatioZ" type="double" value="0.2" />
+  </node>
+
+  <node pkg="ego_planner" type="cut_cloud" name="cut_cloud" output="screen" required="true"> 
+    <param name="vehiclelenth" type="double" value="3" />
+    <param name="vehiclewidth" type="double" value="3" />
+    <param name="GroundZ" type="double" value="0.1" />
+    <!-- <param name="TopZ" type="double" value="0.3" /> -->
+    <param name="UndergroundZ" type="double" value="-0.3" />
+    <param name="d_height" type="double" value="0.2" />
+  </node>
+
+  <!-- topic of your odometry such as VIO or LIO -->
+  <arg name="odom_topic" value="/state_estimation" />
+  <arg name="pointcloud_topic" value="/scan_cropped" />
+
+  <!-- main algorithm params -->
+  <include file="$(find ego_planner)/launch/advanced_param.xml">
+
+    <arg name="map_size_x_" value="$(arg map_size_x)"/>
+    <arg name="map_size_y_" value="$(arg map_size_y)"/>
+    <arg name="map_size_z_" value="$(arg map_size_z)"/>
+    <arg name="odometry_topic" value="$(arg odom_topic)"/>
+
+    <!-- camera pose: transform of camera frame in the world frame -->
+    <!-- depth topic: depth image, 640x480 by default -->
+    <!-- don't set cloud_topic if you already set these ones! -->
+    <arg name="camera_pose_topic" value="/pcl_render_node/camera_pose"/>
+    <arg name="depth_topic" value="/pcl_render_node/depth"/>
+
+    <!-- topic of point cloud measurement, such as from LIDAR  -->
+    <!-- don't set camera pose and depth, if you already set this one! -->
+    <arg name="cloud_topic" value="$(arg pointcloud_topic)"/>
+    <arg name="goal_topic" value="/move_base_simple/goal"/>
+
+    <!-- intrinsic params of the depth camera -->
+
+    <arg name="cx" value="321.04638671875"/>
+    <arg name="cy" value="243.44969177246094"/>
+    <arg name="fx" value="387.229248046875"/>
+    <arg name="fy" value="387.229248046875"/>
+
+    <!-- maximum velocity and acceleration the drone will reach -->
+    <arg name="max_vel" value="1.5" />
+    <arg name="max_acc" value="3" />
+
+    <!--always set to 1.5 times grater than sensing horizen-->
+    <arg name="planning_horizon" value="10.5" />
+
+    <!-- 1: use 2D Nav Goal to select goal  -->
+    <!-- 2: use global waypoints below  -->
+    <arg name="flight_type" value="1" />
+    
+    <!-- global waypoints -->
+    <!-- It generates a piecewise min-snap traj passing all waypoints -->
+    <arg name="point_num" value="5" />
+
+    <arg name="point0_x" value="-15.0" />
+    <arg name="point0_y" value="0.0" />
+    <arg name="point0_z" value="1.0" />
+
+    <arg name="point1_x" value="0.0" />
+    <arg name="point1_y" value="15.0" />
+    <arg name="point1_z" value="1.0" />
+
+    <arg name="point2_x" value="15.0" />
+    <arg name="point2_y" value="0.0" />
+    <arg name="point2_z" value="1.0" />
+
+    <arg name="point3_x" value="0.0" />
+    <arg name="point3_y" value="-15.0" />
+    <arg name="point3_z" value="1.0" />
+
+    <arg name="point4_x" value="-15.0" />
+    <arg name="point4_y" value="0.0" />
+    <arg name="point4_z" value="1.0" />
+    
+  </include>
+
+  <!-- trajectory server -->
+
+  <node pkg="ego_planner" name="traj_server" type="traj_server" output="screen">
+    <remap from="/position_cmd" to="planning/pos_cmd"/>
+
+    <remap from="/odom_world" to="$(arg odom_topic)"/>
+    <param name="traj_server/time_forward" value="1.0" type="double"/>
+  </node>
+
+  <rosparam command="load" file="$(find patchwork)/config/params_ouster128.yaml" />
+
+  <node name="$(anon offline_own_data)" pkg="patchwork" type="offline_own_data" output="screen">
+  <rosparam param="/algorithm">"patchwork"</rosparam> 
+  <remap from="/pointcloud_scan" to="$(arg pointcloud_topic)"/>
+  </node>
+
+  <!-- 基本参数配置 -->
+    <arg name="waypoint_file" default="$(find ego_planner)/config/waypoint_file.txt" />
+    <arg name="visualization" default="true" />
+  
+    <!-- 节点主配置 -->
+    <node pkg="ego_planner" type="interactive_waypoint_publisher" name="waypoint_publisher" output="screen">
+        <!-- 必须参数 -->
+        <param name="waypoint_file" value="$(arg waypoint_file)" />
+    </node>
+
+  <include file="$(find ego_planner)/launch/rviz.launch"/>
+
+
+
+
+</launch>
