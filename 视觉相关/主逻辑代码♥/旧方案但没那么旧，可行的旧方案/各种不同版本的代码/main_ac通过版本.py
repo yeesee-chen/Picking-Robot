@@ -92,6 +92,8 @@ class StateMachineNode:
         self.last_ggwp_value = 0
         self.ggwp_value = 0
 
+        self.c_obs_substate = TaskState.WAITING_FOR_ARRIVAL  # C 区当前子状态
+
         rospy.loginfo("状态机节点初始化完成")
 
     def init_data_storage(self):
@@ -171,7 +173,7 @@ class StateMachineNode:
         }
 
         # 超时配置
-        self.vision_timeout = 15  # 视觉识别超时
+        self.vision_timeout = 10  # 视觉识别超时
         self.arrival_timeout = 120  # 导航到达超时
         self.action_timeout = 10.0  # 动作执行超时
 
@@ -371,7 +373,7 @@ class StateMachineNode:
         #         rospy.loginfo("去右边")
         #         self.area_a_state = AreaAState.NAVIGATE_TO_POINT
         #     else:
-        #         # self.current_observation_side = 0
+        #         # self.current_observation_side = 00
         #         self.area_a_state = AreaAState.MOVE_TO_NEXT
 
         rospy.loginfo("进入A区抓取程序")
@@ -433,7 +435,7 @@ class StateMachineNode:
     def handle_c_goto_b_qr(self):
         """前往B区二维码"""
         if self.has_arrived:
-            self.set_waypoint(11)
+            self.set_waypoint(9)
             self.area_c_state = AreaCState.SCAN_B_QR
 
     def handle_c_scan_b_qr(self):
@@ -444,15 +446,17 @@ class StateMachineNode:
             self.process_b_qr_data(self.qr_data)
             if len(self.b_qr_data) > 0:
                 self.area_c_state = AreaCState.GOTO_C_QR
+                self.set_waypoint(10)
 
     def handle_c_goto_c_qr(self):
         """前往C区二维码"""
         flag = 0
+
         if self.has_arrived:
-            self.set_waypoint(20)
+            self.set_waypoint(11)
             flag = 1
         if self.has_arrived and flag == 1:
-            self.set_waypoint(21)
+            self.set_waypoint(20)
             self.area_c_state = AreaCState.SCAN_C_QR
 
     def handle_c_scan_c_qr(self):
@@ -474,54 +478,161 @@ class StateMachineNode:
             self.area_c_state = AreaCState.COMPLETED
 
     def handle_c_navigate(self):
-        # 前往第n个航点
-        self.set_waypoint(self.c_task_list[0])
-        rospy.loginfo("前往导航点")
-        self.c_current_index = 0
+        """C区导航到目标点"""
+        # 只在刚进入此状态时设置航点
+        if self.task_state == TaskState.WAITING_FOR_ARRIVAL:
+            if len(self.c_task_list) > 0:
+                target_waypoint = self.c_task_list[0]
+                self.set_waypoint(target_waypoint)
+                rospy.loginfo(f"C区：前往航点 {target_waypoint}")
+                # 保持在等待到达状态
+            else:
+                # 没有更多任务，直接进入倾倒阶段
+                self.area_c_state = AreaCState.DUMP_FRUITS
+                return
+
+        # 检查是否已经到达
         if self.has_arrived:
-            rospy.loginfo("已经到达导航点")
-            self.task_state = TaskState.SETTING_OBSERVATION
+            rospy.loginfo("C区：已到达目标航点")
+            # 直接进入抓取状态，不改变task_state
             self.area_c_state = AreaCState.EXECUTE_GRAB
 
     def handle_c_execute_grab(self):
+        """C区执行抓取"""
         # 获取当前任务的观测位模式
-        obs_mode = self.c_obs_list
-        # self.task_state = TaskState.SETTING_OBSERVATION
-        # 执行通用观测+抓取流程
-        if obs_mode[0] != 0:
-            success = self.execute_observation_task(obs_mode[0])  # 右侧观测位
-            rospy.loginfo(f"发布观测位{obs_mode[0]}")
-            if success:
-                if self.should_grab_fruit():
+        if len(self.c_obs_list) == 0:
+            rospy.logwarn("C区：观测位列表为空")
+            self.task_state = TaskState.WAITING_FOR_ARRIVAL  # 重置状态
+            self.area_c_state = AreaCState.MOVE_TO_NEXT_TARGET
+            return
 
-                    self.execute_grab_action()
-                else:
-                    self.arm_pub.publish("观测位:0;")
-                    rospy.sleep(1)
-        else:
-            rospy.loginfo("中间点位")
+        obs_mode = self.c_obs_list[0]
+
+        # 如果观测位为0，说明是中间点位，直接跳过
+        if obs_mode == 0:
+            rospy.loginfo("C区：中间点位，跳过观测")
             self.arm_pub.publish("观测位:0;")
             rospy.sleep(1)
-        self.c_current_index = 1
-        self.area_c_state = AreaCState.MOVE_TO_NEXT_TARGET
+            self.task_state = TaskState.WAITING_FOR_ARRIVAL  # 重置状态
+            self.area_c_state = AreaCState.MOVE_TO_NEXT_TARGET
+            return
+
+        # 初始化观测抓取流程（确保从正确状态开始）
+        if self.task_state == TaskState.COMPLETED:
+            self.task_state = TaskState.WAITING_FOR_ARRIVAL
+            rospy.loginfo("C区：重置任务状态为WAITING_FOR_ARRIVAL")
+
+        # 执行C区专用的观测+抓取流程
+        success = self.execute_c_observation_and_grab(obs_mode)
+
+        if success:
+            # 观测和抓取都完成，进入下一个目标
+            self.area_c_state = AreaCState.MOVE_TO_NEXT_TARGET
+
+    def execute_c_observation_and_grab(self, observation_pos):
+        """C区专用的观测+抓取流程，不会重置task_state为WAITING_FOR_ARRIVAL"""
+        rospy.loginfo(f"[C区观测抓取] task_state = {self.task_state}")
+
+        if self.task_state == TaskState.WAITING_FOR_ARRIVAL:
+            # 刚到达航点，开始观测流程
+            self.reset_vision_data()
+            rospy.sleep(1)
+            self.arm_pub.publish(f"观测位:{observation_pos};")
+            rospy.sleep(0.4)
+            rospy.loginfo(f"C区：设置观测位 {observation_pos}")
+            self.task_state = TaskState.WAITING_FOR_VISION
+            self.state_start_time = time.time()
+            return False
+
+        elif self.task_state == TaskState.WAITING_FOR_VISION:
+            rospy.sleep(2)
+            rospy.loginfo("C区：等待视觉识别")
+            if self.fruit_class and self.fruit_point:
+                self.task_state = TaskState.PROCESSING_DATA
+                return False
+            elif time.time() - self.state_start_time > self.vision_timeout:
+                rospy.logwarn("C区：视觉识别超时，跳过当前目标")
+                self.reset_vision_data()
+                self.arm_pub.publish("观测位:0;")
+                rospy.sleep(1)
+                self.task_state = TaskState.COMPLETED
+                return True
+            return False
+
+
+        elif self.task_state == TaskState.PROCESSING_DATA:
+            # 播报果实信息
+            self.broadcast_fruit_info()
+            self.task_state = TaskState.EXECUTING_ACTION
+            return False
+
+        elif self.task_state == TaskState.EXECUTING_ACTION:
+            # 判断是否需要抓取
+            if self.should_grab_fruit():
+                rospy.loginfo("C区：满足抓取条件，开始抓取")
+                self.execute_grab_action()
+            else:
+                rospy.loginfo("C区：不满足抓取条件")
+                self.arm_pub.publish("观测位:0;")
+                rospy.sleep(1)
+
+            self.task_state = TaskState.COMPLETED
+            return True  # 直接返回True，表示整个流程完成
+
+        elif self.task_state == TaskState.COMPLETED:
+            # 这个状态不应该在这里处理，应该在handle_c_execute_grab中重置
+            rospy.logwarn("C区：task_state为COMPLETED，这不应该发生")
+            return True
+
+        return False
 
     def handle_c_move_to_next(self):
-        self.c_task_list = self.c_task_list[self.c_current_index:]
-        self.c_obs_list = self.c_obs_list[self.c_current_index:]
+        """C区移动到下一个目标"""
+        # 移除已完成的任务
         if len(self.c_task_list) > 0:
+            self.c_task_list = self.c_task_list[1:]  # 移除第一个元素
+        if len(self.c_obs_list) > 0:
+            self.c_obs_list = self.c_obs_list[1:]  # 移除第一个元素
+
+        rospy.loginfo(f"C区：剩余任务数量 {len(self.c_task_list)}")
+
+        # 重置任务状态为等待到达
+        self.task_state = TaskState.WAITING_FOR_ARRIVAL
+
+        # 检查是否还有任务
+        if len(self.c_task_list) > 0:
+            # 有下一个任务，回到导航状态
             self.area_c_state = AreaCState.NAVIGATE_TO_TARGET
         else:
+            # 所有任务完成，进入倾倒阶段
+            rospy.loginfo("C区：所有抓取任务完成，准备倾倒")
             self.area_c_state = AreaCState.DUMP_FRUITS
 
     def handle_c_dump_fruits(self):
-        self.set_waypoint(36)
+        """C区倾倒果实"""
+        if self.task_state == TaskState.WAITING_FOR_ARRIVAL:
+            self.set_waypoint(36)
+            self._dump_waypoint_set = True
+            rospy.loginfo("C区：前往倾倒点")
+
         if self.has_arrived:
+            rospy.loginfo("C区：到达倾倒点，开始倾倒")
             self.arm_pub.publish("动作组:10;")  # dump fruit cmd
+            rospy.sleep(3)  # 等待倾倒完成
+            self.task_state = TaskState.WAITING_FOR_ARRIVAL  # 重置状态
+            self._dump_waypoint_set = False  # 重置标志
             self.area_c_state = AreaCState.RETURN_TO_START
 
     def handle_c_return(self):
-        self.set_waypoint(21)
+        """C区返回起始点"""
+        if self.task_state == TaskState.WAITING_FOR_ARRIVAL or not hasattr(self, '_return_waypoint_set'):
+            self.set_waypoint(21)
+            self._return_waypoint_set = True
+            rospy.loginfo("C区：返回起始点")
+
         if self.has_arrived:
+            rospy.loginfo("C区：已返回起始点")
+            self._return_waypoint_set = False  # 重置标志
             self.area_c_state = AreaCState.COMPLETED
 
     # =================== B区状态处理 ===================
@@ -592,6 +703,7 @@ class StateMachineNode:
         rospy.loginfo(f"[execute_observation_task] task_state = {self.task_state}")
         if self.task_state == TaskState.SETTING_OBSERVATION:
             self.reset_vision_data()  # 清空旧数据
+            rospy.sleep(0.4)
             self.arm_pub.publish(f"观测位:{observation_pos};")
             rospy.sleep(0.4)  # 相机/云台稳定
             rospy.loginfo("清空旧数据,发布观测位")
@@ -631,8 +743,8 @@ class StateMachineNode:
             rospy.loginfo("满足种类和可以抓取条件")
             # 发送坐标给机械臂
             r = self.fruit_point.x * 100
-            if r > 46:
-                r = 46
+            if r > 46.5:
+                r = 46.5
             else:
                 pass
             z = self.fruit_point.z * 100
@@ -760,7 +872,7 @@ class StateMachineNode:
     def generate_b_observation(self, waypoint):
         if waypoint in {16, 17, 18, 19}:  # 左侧
             return 3
-        elif waypoint in {12, 13, 14, 15}:  # 右侧
+        elif waypoint in {12, 13, 14, 15}:  # 右侧0.00
             return 4
         return 0
 
@@ -864,6 +976,7 @@ class StateMachineNode:
             obs_result.append(0)
             result.append(37)
             obs_result.append(0)  # 点位20对应观察状态0
+
         else:
             result.append(21)
             obs_result.append(0)
@@ -908,7 +1021,6 @@ class StateMachineNode:
                 result.append(current_target)
                 obs_result.append(get_current_obs(pos, current_target))
                 last_target = current_target
-
         if result[-1] in [24, 25, 26, 27]:
             result.append(23)
             obs_result.append(0)

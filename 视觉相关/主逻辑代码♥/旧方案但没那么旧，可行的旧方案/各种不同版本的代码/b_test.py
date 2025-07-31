@@ -223,6 +223,7 @@ class BAreaTestNode:
         if self.has_arrived:
             rospy.loginfo(f"已到达B区航点: {self.b_waypoint_list[self.b_current_index]}")
             self.area_b_state = AreaBState.SCAN_AND_GRAB
+            self.task_state = TaskState.SETTING_OBSERVATION
 
     def handle_b_scan_and_grab(self):
         """在当前航点处理抓取"""
@@ -232,7 +233,7 @@ class BAreaTestNode:
 
         rospy.loginfo(f"当前航点: {wp}, 期望水果: {expected}")
 
-        self.task_state = TaskState.SETTING_OBSERVATION
+        # self.task_state = TaskState.SETTING_OBSERVATION
         self.b_guancewei = self.generate_b_observation(wp)
 
         # 执行观测任务
