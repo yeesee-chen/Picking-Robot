@@ -2,11 +2,12 @@
 """
 YOLOv5水果检测ROS节点 - 优化版
 功能：
-1. 只发布最左侧水果（x坐标最小）
-2. 坐标稳定性检查，防止抖动
-3. 避免重复发布相同坐标
-4. 发布后暂停2秒机制
-5. 只发布标签和坐标信息
+1. flag=1,2时：只发布最左侧水果（x坐标最小）
+2. flag=3,4时：只发布成熟的apple或pear
+3. 坐标稳定性检查，防止抖动
+4. 避免重复发布相同坐标
+5. 发布后暂停2秒机制
+6. 只发布标签和坐标信息
 """
 
 import rospy
@@ -48,8 +49,8 @@ class OptimizedYoloNode:
         self.observation_positions = {
             1: (0.008, 0.272, 0.11),
             2: (-0.008, -0.262, 0.11),
-            3: (-0.0168, -0.0374, 0.192),
-            4: (0.0168, 0.0374, 0.192),
+            3: (-0.0168, 0.0374, 0.192),
+            4: (-0.0168, -0.0374, 0.192),
             5: (0.008, 0.272, 0.11),
             6: (-0.008, -0.262, 0.11)
         }
@@ -65,13 +66,13 @@ class OptimizedYoloNode:
 
         rospy.loginfo("优化版YOLOv5水果检测节点初始化完成")
 
-
     def _init_parameters(self):
         """初始化ROS参数"""
         # 模型相关参数
         # 参数需要修改为自定义的文件夹路径
         self.yolov5_path = rospy.get_param('~yolov5_path', '/home/nvidia/ego-planner/src/yolo_realsense_ros/yolov5')
-        self.weight_path = rospy.get_param('~weight_path', '/home/nvidia/ego-planner/src/yolo_realsense_ros/weights/best.pt')
+        self.weight_path = rospy.get_param('~weight_path',
+                                           '/home/nvidia/ego-planner/src/yolo_realsense_ros/weights/best.pt')
         self.confidence_threshold = rospy.get_param('~confidence_threshold', 0.5)
 
         # 深度相关参数
@@ -93,7 +94,7 @@ class OptimizedYoloNode:
         self.stability_frames = rospy.get_param('~stability_frames', 5)  # 需要连续稳定的帧数
         self.stability_threshold = rospy.get_param('~stability_threshold', 0.05)  # 稳定性阈值（米）
         self.duplicate_threshold = rospy.get_param('~duplicate_threshold', 0.05)  # 重复坐标判断阈值（米）
-        self.pause_duration = rospy.get_param('~pause_duration', 2.0)  # 暂停时长（秒）
+        self.pause_duration = rospy.get_param('~pause_duration', 0.1)  # 暂停时长（秒）
 
         # 水果类别与标签id映射
         self.fruit_maturity_mapping = {
@@ -110,6 +111,9 @@ class OptimizedYoloNode:
             10: {'name': 'pear_1'},
             11: {'name': 'pear_0'}
         }
+
+        # 新增：成熟的apple和pear的类别ID
+        self.mature_apple_pear_ids = {9, 10}  # apple_1 和 pear_1
 
     def _init_model(self):
         """初始化YOLOv5模型"""
@@ -156,7 +160,7 @@ class OptimizedYoloNode:
     def _position_callback(self, msg):
         """小车位置回调函数"""
         position = msg.data
-        if position in range(1, 6):
+        if position in range(1, 7):  # 扩展到支持1-6的位置
             self.current_region = position
             rospy.loginfo(f"更新小车位置: 位置 {position}")
         else:
@@ -245,14 +249,17 @@ class OptimizedYoloNode:
                     self._publish_visualization(bgr_img, [], header, "No fruits detected")
                 return
 
-            # 找到最左侧的水果（x坐标最小）
-            leftmost_detection = self._find_leftmost_fruit(detections)
-            if leftmost_detection is None:
+            # 根据当前位置选择目标水果
+            target_detection = self._select_target_fruit(detections)
+            if target_detection is None:
                 self.stability_buffer.clear()
+                if self.enable_visualization:
+                    detection_mode = "Mature apple/pear only" if self.current_region in [3, 4] else "Leftmost fruit"
+                    self._publish_visualization(bgr_img, [], header, f"No target found ({detection_mode})")
                 return
 
-            # 计算最左侧水果的3D坐标
-            x1, y1, x2, y2, conf, cls_id = leftmost_detection
+            # 计算目标水果的3D坐标
+            x1, y1, x2, y2, conf, cls_id = target_detection
             cls_id = int(cls_id)
 
             # 计算边界框中心点
@@ -269,7 +276,6 @@ class OptimizedYoloNode:
             class_name = self.fruit_maturity_mapping[cls_id]['name']
 
             # 创建检测结果
-            # 将结果作为一个列表
             detection_result = {
                 'position': world_coords,
                 'class_ripeness': class_name,
@@ -288,7 +294,8 @@ class OptimizedYoloNode:
                     self.last_publish_time = time.time()
                     self.is_in_pause = True
 
-                    rospy.loginfo(f"发布水果检测结果: 位置{world_coords}, 类别: {class_name}")
+                    detection_mode = "成熟apple/pear" if self.current_region in [3, 4] else "最左侧水果"
+                    rospy.loginfo(f"发布{detection_mode}检测结果: 位置{world_coords}, 类别: {class_name}")
                     rospy.loginfo(f"进入{self.pause_duration}秒暂停期...")
                 else:
                     rospy.loginfo("检测到重复坐标，跳过发布")
@@ -297,11 +304,25 @@ class OptimizedYoloNode:
             if self.enable_visualization:
                 status = "Stable - Published" if len(
                     self.stability_buffer) >= self.stability_frames else f"Stabilizing {len(self.stability_buffer)}/{self.stability_frames}"
-                self._publish_visualization(bgr_img, [leftmost_detection], header, status, detection_result)
+                detection_mode = "Mature apple/pear mode" if self.current_region in [3, 4] else "Leftmost fruit mode"
+                status += f" ({detection_mode})"
+                self._publish_visualization(bgr_img, [target_detection], header, status, detection_result)
 
         except Exception as e:
             rospy.logerr(f"检测发布异常: {str(e)}")
             rospy.logerr(traceback.format_exc())
+
+    def _select_target_fruit(self, detections):
+        """根据当前位置选择目标水果"""
+        if len(detections) == 0:
+            return None
+
+        if self.current_region in [3, 4]:
+            # 位置3、4：只选择成熟的apple或pear
+            return self._find_mature_apple_pear(detections)
+        else:
+            # 位置1、2：选择最左侧的水果
+            return self._find_leftmost_fruit(detections)
 
     def _find_leftmost_fruit(self, detections):
         """找到最左侧的水果（x坐标最小）"""
@@ -310,6 +331,37 @@ class OptimizedYoloNode:
         # 按x1坐标排序，选择最左侧的
         leftmost_idx = np.argmin(detections[:, 0])
         return detections[leftmost_idx]
+
+    def _find_mature_apple_pear(self, detections):
+        """找到成熟的apple或pear（优先apple_1, 然后pear_1）"""
+        if len(detections) == 0:
+            return None
+
+        # 筛选出成熟的apple和pear
+        mature_detections = []
+        for det in detections:
+            cls_id = int(det[5])
+            if cls_id in self.mature_apple_pear_ids:
+                mature_detections.append(det)
+
+        if len(mature_detections) == 0:
+            return None
+
+        # 优先选择apple_1 (cls_id=9)，然后是pear_1 (cls_id=10)
+        apple_detections = [det for det in mature_detections if int(det[5]) == 9]  # apple_1
+        if len(apple_detections) > 0:
+            # 如果有多个apple_1，选择置信度最高的
+            best_idx = np.argmax([det[4] for det in apple_detections])
+            return apple_detections[best_idx]
+
+        # 如果没有apple_1，选择pear_1
+        pear_detections = [det for det in mature_detections if int(det[5]) == 10]  # pear_1
+        if len(pear_detections) > 0:
+            # 如果有多个pear_1，选择置信度最高的
+            best_idx = np.argmax([det[4] for det in pear_detections])
+            return pear_detections[best_idx]
+
+        return None
 
     def _check_stability(self, detection_result):
         """检查检测结果的稳定性"""
@@ -362,6 +414,7 @@ class OptimizedYoloNode:
 
     def _calculate_3d_coordinates(self, cx, cy, depth_img):
         """计算3D世界坐标并转换到机械臂基坐标系"""
+        global phi_deg, rho
         x_base = None
         y_base = None
         z_base = None
@@ -386,41 +439,35 @@ class OptimizedYoloNode:
             x_cam = (cx - self.cx) * z / self.fx
             y_cam = (cy - self.cy) * z / self.fy
 
-            # 获取当前观测位坐标，如果有/ggwp消息就接收，如果没有默认1
-            # if self.current_region in self.observation_positions:
-            #     x_init, y_init, z_init = self.observation_positions[self.current_region]
-            # else:
-            #     x_init, y_init, z_init = self.observation_positions[2]
-
-            x_init, y_init, z_init = self.observation_positions[2]
+            # 获取当前观测位坐标
+            x_init, y_init, z_init = self.observation_positions[self.current_region]
             flag = self.current_region
 
             # 位置1
-            if flag == 1 :
+            if flag == 1:
                 # 相机坐标系转机械臂基坐标系
                 x_base = x_cam + x_init
-                y_base = y_init + y_cam
+                y_base = y_init - y_cam
                 z_base = -0.1
                 rho = np.sqrt(x_base ** 2 + y_base ** 2)
-                rho = rho + 0.05
+                rho = rho + 0.12
                 phi = np.arctan2(y_base, x_base)
                 phi_deg = np.degrees(phi)
-                phi_deg = 180 + phi_deg - 7
+                phi_deg = 180 - phi_deg - 7
 
             # 位置2
-            elif flag == 2 :
+            elif flag == 2:
                 x_base = x_init - x_cam
                 y_base = y_init + y_cam
-                z_base = -0.1
+                z_base = -0.13
                 rho = np.sqrt(x_base ** 2 + y_base ** 2)
-                rho = rho + 0.05
+                rho = rho + 0.15
                 phi = np.arctan2(y_base, x_base)
                 phi_deg = np.degrees(phi)
-                phi_deg = phi_deg + 8.0
+                phi_deg = -(180 + phi_deg + 8.0)
 
-
-            # 处理位置3、4的相机旋转
-            elif flag == 3 :
+                # 处理位置3、4的相机旋转
+            elif flag == 4:
                 x_cam = x_cam
                 y_cam = y_cam * 0.966
                 z_cam = z_cam * 0.966
@@ -428,22 +475,32 @@ class OptimizedYoloNode:
                 y_base = y_init - z_cam
                 z_base = z_init - y_cam
                 rho = np.sqrt(x_base ** 2 + y_base ** 2)
+                rho = rho - 0.05
                 phi = np.arctan2(y_base, x_base)
                 phi_deg = np.degrees(phi)
+                if phi_deg < -95:
+                    phi_deg = phi_deg * 1.15
+                else:
+                    pass
 
-            elif flag == 4 :
+            elif flag == 3:
                 x_cam = x_cam
                 y_cam = y_cam * 0.966
                 z_cam = z_cam * 0.966
                 x_base = x_init + x_cam
                 y_base = y_init + z_cam
-                z_base = z_init - y_cam
+                z_base = z_init - y_cam - 0.02
+                if z_base <= 0.15:
+                    z_base = z_base - 0.1
                 rho = np.sqrt(x_base ** 2 + y_base ** 2)
+                rho = rho - 0.09
                 phi = np.arctan2(y_base, x_base)
                 phi_deg = np.degrees(phi)
-
-            # 转换为圆柱坐标系
-            
+                phi_deg = 180 - phi_deg
+                if phi_deg > 95:
+                    phi_deg = phi_deg * 1.15
+                else:
+                    pass
 
             return rho, phi_deg, z_base
 
@@ -458,11 +515,16 @@ class OptimizedYoloNode:
 
             # 绘制检测结果
             if len(detections) > 0 and detection_result:
-                det = detections[0]  # 只有一个检测结果（最左侧）
+                det = detections[0]  # 只有一个检测结果
                 x1, y1, x2, y2, conf, cls_id = det
 
+                # 根据检测模式选择颜色
+                if self.current_region in [3, 4]:
+                    color = (255, 0, 0)  # 蓝色表示成熟apple/pear模式
+                else:
+                    color = (0, 255, 0)  # 绿色表示最左侧模式
+
                 # 绘制边界框
-                color = (0, 255, 0)
                 cv2.rectangle(vis_img, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
 
                 # 添加标签
@@ -473,6 +535,10 @@ class OptimizedYoloNode:
                 # 绘制坐标信息
                 coord_text = f"Pos: ({detection_result['position'][0]:.2f}, {detection_result['position'][1]:.2f}, {detection_result['position'][2]:.2f})"
                 cv2.putText(vis_img, coord_text, (10, vis_img.shape[0] - 60), self.font, 0.5, (255, 255, 255), 1)
+
+            # 显示状态信息
+            cv2.putText(vis_img, status, (10, 30), self.font, 0.5, (255, 255, 255), 1)
+            cv2.putText(vis_img, f"Position: {self.current_region}", (10, 50), self.font, 0.5, (255, 255, 255), 1)
 
             # 发布图像
             vis_msg = self.bridge.cv2_to_imgmsg(vis_img, "bgr8")
@@ -495,6 +561,10 @@ class OptimizedYoloNode:
             pause_text = f"PAUSED - {remaining_time:.1f}s remaining"
             cv2.putText(vis_img, pause_text, (10, 30), self.font, 0.7, (0, 0, 255), 2)
             cv2.putText(vis_img, f"Position: {self.current_region}", (10, 60), self.font, 0.7, (255, 0, 0), 2)
+
+            # 显示检测模式
+            detection_mode = "Mature apple/pear mode" if self.current_region in [3, 4] else "Leftmost fruit mode"
+            cv2.putText(vis_img, detection_mode, (10, 90), self.font, 0.5, (255, 255, 0), 1)
 
             # 发布图像
             vis_msg = self.bridge.cv2_to_imgmsg(vis_img, "bgr8")

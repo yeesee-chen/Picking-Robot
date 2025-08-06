@@ -120,6 +120,7 @@ class BAreaTestNode:
         # 状态时间戳
         self.state_start_time = time.time()
         self.id_pub_time = time.time()
+        self.observation_set_time = None  # 新增：观测位设置时间，类似于rospy.sleep的作用，尝试一下
 
         # GGWP值管理
         self.last_ggwp_value = 0
@@ -193,7 +194,7 @@ class BAreaTestNode:
     def handle_finished_state(self):
         """处理完成状态"""
         rospy.loginfo("B区测试完成！")
-        rospy.loginfo(f"总共抓取了 {self.fruit_count} 个果实")
+        rospy.loginfo(f"总共处理了 {self.fruit_count} 个航点")
         rospy.sleep(0.1)
 
     def handle_error_state(self):
@@ -215,15 +216,16 @@ class BAreaTestNode:
 
     def handle_b_navigate(self):
         """前往当前 B 区航点"""
-        if self.b_current_index == 0:
-            # 第一次进入 B 区，前往航点 19
-            self.set_waypoint(self.b_waypoint_list[0])
-            rospy.loginfo(f"前往B区第一个航点: {self.b_waypoint_list[0]}")
+        if self.task_state == TaskState.WAITING_FOR_ARRIVAL:
+            if self.b_current_index == 0 and self.current_waypoint_id == 0:
+                # 第一次进入 B 区，前往航点 19
+                self.set_waypoint(self.b_waypoint_list[0])
+                rospy.loginfo(f"前往B区第一个航点: {self.b_waypoint_list[0]}")
 
-        if self.has_arrived:
-            rospy.loginfo(f"已到达B区航点: {self.b_waypoint_list[self.b_current_index]}")
-            self.area_b_state = AreaBState.SCAN_AND_GRAB
-            self.task_state = TaskState.SETTING_OBSERVATION
+            if self.has_arrived:
+                rospy.loginfo(f"已到达B区航点: {self.b_waypoint_list[self.b_current_index]}")
+                self.area_b_state = AreaBState.SCAN_AND_GRAB
+                self.task_state = TaskState.SETTING_OBSERVATION  # 重要且新增：转换任务状态
 
     def handle_b_scan_and_grab(self):
         """在当前航点处理抓取"""
@@ -232,33 +234,64 @@ class BAreaTestNode:
         expected = self.b_qr_data[self.b_qr_indices[idx]]
 
         rospy.loginfo(f"当前航点: {wp}, 期望水果: {expected}")
+        # 尝试一下在这个函数里面处理任务状态
 
-        # self.task_state = TaskState.SETTING_OBSERVATION
-        self.b_guancewei = self.generate_b_observation(wp)
+        # 执行观测任务状态机
+        if self.task_state == TaskState.SETTING_OBSERVATION:
+            # 处理设置观测位状态
+            if self.observation_set_time is None:
+                # 首次进入，设置观测位
+                self.reset_vision_data()  # 清空旧数据
+                self.b_guancewei = self.generate_b_observation(wp)
+                self.arm_pub.publish(f"观测位:{self.b_guancewei};")
+                self.observation_set_time = time.time()
+                rospy.loginfo(f"设置观测位: {self.b_guancewei}")
+            elif time.time() - self.observation_set_time > 1.0:  # 等待1秒让观测位稳定
+                # 观测位设置完成，转换到等待视觉状态
+                self.task_state = TaskState.WAITING_FOR_VISION
+                self.state_start_time = time.time()
+                self.observation_set_time = None
+                rospy.loginfo("观测位设置完成，开始等待视觉识别...")
 
-        # 执行观测任务
-        success = self.execute_observation_task(self.b_guancewei)
+        elif self.task_state == TaskState.WAITING_FOR_VISION:
+            # 处理等待视觉识别状态
+            if self.fruit_class and self.fruit_point:
+                rospy.loginfo("接收到视觉数据，进入处理阶段")
+                self.task_state = TaskState.PROCESSING_DATA
+            elif time.time() - self.state_start_time > self.vision_timeout:
+                rospy.logwarn("视觉识别超时，跳过当前目标")
+                self.reset_vision_data()
+                self.arm_pub.publish("观测位:0;")  # 复位
+                self.task_state = TaskState.COMPLETED
 
-        if success:
+        elif self.task_state == TaskState.PROCESSING_DATA:
+            # 处理数据处理状态
+            self.broadcast_fruit_info()  # 播报
             # 检查识别到的水果是否匹配期望
             if self.fruit_class == expected:
                 rospy.loginfo(f"水果匹配成功: {self.fruit_class} == {expected}")
                 if self.should_grab_fruit():
-                    # 根据高度调整机械臂
-                    # if self.fruit_point and self.fruit_point.z <= 0.17:  # 转换为米
-                    #     self.arm_pub.publish("机械臂:10,0,90;")
-                    #     rospy.sleep(1)
-                    self.execute_grab_action()
+                    rospy.loginfo("水果可抓取，执行抓取动作")
+                    self.task_state = TaskState.EXECUTING_ACTION
                 else:
                     rospy.loginfo("水果不可抓取（未成熟）")
                     self.arm_pub.publish("观测位:0;")
-                    rospy.sleep(1)
+                    self.task_state = TaskState.COMPLETED
             else:
                 rospy.loginfo(f"水果不匹配: {self.fruit_class} != {expected}")
                 self.arm_pub.publish("观测位:0;")
-                rospy.sleep(1)
+                self.task_state = TaskState.COMPLETED
 
-        self.area_b_state = AreaBState.MOVE_TO_NEXT
+        elif self.task_state == TaskState.EXECUTING_ACTION:
+            # 处理执行动作状态
+            success = self.execute_grab_action()
+            if success:
+                self.fruit_count += 1
+                rospy.loginfo(f"成功处理，当前数量: {self.fruit_count}")
+            self.task_state = TaskState.COMPLETED
+
+        elif self.task_state == TaskState.COMPLETED:
+            self.area_b_state = AreaBState.MOVE_TO_NEXT
 
     def handle_b_move_to_next(self):
         """移动到下一条目"""
@@ -274,77 +307,17 @@ class BAreaTestNode:
             self.area_b_state = AreaBState.NAVIGATE_TO_POINT
             self.task_state = TaskState.WAITING_FOR_ARRIVAL
 
-    # =================== 通用任务执行 ===================
-    def execute_observation_task(self, observation_pos):
-        """执行观测任务的通用流程"""
-        if self.task_state == TaskState.SETTING_OBSERVATION:
-            self.reset_vision_data()  # 清空旧数据
-            self.arm_pub.publish(f"观测位:{observation_pos};")
-            rospy.sleep(0.4)  # 相机/云台稳定
-            rospy.loginfo(f"设置观测位: {observation_pos}")
-            self.task_state = TaskState.WAITING_FOR_VISION
-            self.state_start_time = time.time()
-            return False
-
-        elif self.task_state == TaskState.WAITING_FOR_VISION:
-            rospy.sleep(2)
-            if self.fruit_class and self.fruit_point:
-                rospy.loginfo("接收到完整视觉数据，进入处理阶段")
-                self.task_state = TaskState.PROCESSING_DATA
-                return False
-            elif time.time() - self.state_start_time > self.vision_timeout:
-                rospy.logwarn("视觉识别超时，跳过当前目标")
-                self.reset_vision_data()
-                self.task_state = TaskState.COMPLETED
-                return True
-            return False
-
-        elif self.task_state == TaskState.PROCESSING_DATA:
-            self.broadcast_fruit_info()
-            self.task_state = TaskState.COMPLETED
-            return True
-
-        elif self.task_state == TaskState.COMPLETED:
-            self.task_state = TaskState.WAITING_FOR_ARRIVAL
-            return True
-
-        return False
-
+    # =================== 动作执行 ===================
     def execute_grab_action(self):
         """执行抓取动作"""
         if self.fruit_point and self.is_catchable:
-            rospy.loginfo("b区测试demo 不进行抓取 只进行导航和语音测试")
-        #
-        #     # 计算机械臂参数
-        #     r = self.fruit_point.x * 100
-        #     if r > 46:
-        #         r = 46
-        #     z = self.fruit_point.z * 100
-        #     phi = self.fruit_point.y
-        #
-        #     rospy.loginfo(f"机械臂参数: r={r}, z={z}, phi={phi}")
-        #
-        #     # 发送坐标给机械臂
-        #     self.arm_pub.publish(f"机械臂:{r},{z},{phi};")
-        #     rospy.sleep(3)
-        #
-        #     # 执行抓取序列
-        #     self.arm_pub.publish("爪子:0;")  # 爪子收缩
-        #     rospy.loginfo("爪子收缩")
-        #     rospy.sleep(2)
-        #
-        #     self.arm_pub.publish("观测位:0;")  # 复位
-        #     rospy.loginfo("机械臂复位")
-        #     rospy.sleep(2)
-        #
-        #     self.arm_pub.publish("爪子:1;")  # 爪子张开
-        #     rospy.loginfo("爪子张开")
-        #     rospy.sleep(2)
-        #
-        #     self.fruit_count += 1
-        #     rospy.loginfo(f"成功抓取，当前数量: {self.fruit_count}")
-        # else:
-        #     rospy.loginfo("不满足抓取条件")
+            rospy.loginfo("B区测试demo - 不进行实际抓取，只进行导航和语音测试")
+        else:
+            rospy.loginfo("不满足抓取条件")
+
+        # 复位观测位
+        self.arm_pub.publish("观测位:0;")
+        rospy.sleep(1)
 
         self.reset_vision_data()
         return True
@@ -354,6 +327,7 @@ class BAreaTestNode:
         """转换到B区"""
         self.system_state = SystemState.AREA_B
         self.area_b_state = AreaBState.NAVIGATE_TO_POINT
+        self.task_state = TaskState.WAITING_FOR_ARRIVAL
         self.b_current_index = 0
         rospy.loginfo("转换到B区状态")
 
@@ -430,7 +404,8 @@ class BAreaTestNode:
         """生成视觉识别指令"""
         if self.system_state == SystemState.AREA_B:
             if self.area_b_state == AreaBState.SCAN_AND_GRAB:
-                return self.b_guancewei
+                if self.task_state in [TaskState.WAITING_FOR_VISION]:
+                    return self.b_guancewei
         return 0
 
 
@@ -442,7 +417,7 @@ def main():
     except rospy.ROSInterruptException:
         rospy.loginfo("B区测试程序被中断")
     except Exception as e:
-        rospy.logerr(f"B区测试程序运行失败: {e}")
+        rospy.logerr(f"程序运行失败: {e}")
 
 
 if __name__ == '__main__':
