@@ -158,7 +158,7 @@ class StateMachineNode:
         self.qr_sub = rospy.Subscriber('/qr_message', String, self.qr_callback)
 
         # 发布者
-        self.arm_pub = rospy.Publisher('/robot_arm_point', String, queue_size=10)
+        self.arm_pub = rospy.Publisher('/robot_arm_point', String, queue_size=50)
         self.waypoint_pub = rospy.Publisher('/waypoint_i_d', Int32, queue_size=1)
         self.ggwp_pub = rospy.Publisher('/ggwp', Int32, queue_size=10)
 
@@ -704,24 +704,17 @@ class StateMachineNode:
         expected = self.b_qr_data[self.b_qr_indices[idx]]
 
         rospy.loginfo(f"当前航点: {wp}, 期望水果: {expected}")
-        # 尝试一下在这个函数里面处理任务状态
-
         # 执行观测任务状态机
         if self.task_state == TaskState.SETTING_OBSERVATION:
-            # 处理设置观测位状态
-            if self.observation_set_time is None:
-                # 首次进入，设置观测位
-                self.reset_vision_data()  # 清空旧数据
-                self.b_guancewei = self.generate_b_observation(wp)
-                self.arm_pub.publish(f"观测位:{self.b_guancewei};")
-                self.observation_set_time = time.time()
-                rospy.loginfo(f"设置观测位: {self.b_guancewei}")
-            elif time.time() - self.observation_set_time > 1.0:  # 等待1秒让观测位稳定
-                # 观测位设置完成，转换到等待视觉状态
-                self.task_state = TaskState.WAITING_FOR_VISION
-                self.state_start_time = time.time()
-                self.observation_set_time = None
-                rospy.loginfo("观测位设置完成，开始等待视觉识别...")
+            # 直接设置观测位并等待
+            self.reset_vision_data()
+            self.b_guancewei = self.generate_b_observation(wp)
+            self.arm_pub.publish(f"观测位:{self.b_guancewei};")
+            rospy.loginfo(f"设置观测位: {self.b_guancewei}")
+            rospy.sleep(1.0)  # 确保观测位稳定
+            self.task_state = TaskState.WAITING_FOR_VISION
+            self.state_start_time = time.time()
+            rospy.loginfo("开始等待视觉识别...")
 
         elif self.task_state == TaskState.WAITING_FOR_VISION:
             # 处理等待视觉识别状态
@@ -946,15 +939,16 @@ class StateMachineNode:
                 ripeness_id = 19 if self.fruit_ripeness else 18
                 self.arm_pub.publish(f"语音:{class_id};")
                 rospy.loginfo(f"C区语音播报类别为{class_id}")
-                rospy.sleep(0.5)
+                rospy.sleep(1)
                 self.arm_pub.publish(f"语音:{ripeness_id};")
                 rospy.loginfo(f"C区语音播报成熟度为{ripeness_id}")
+                rospy.sleep(0.5)
 
     def check_timeouts(self):
         """检查各种超时"""
         current_time = time.time()
         navigate_timeout = current_time - self.id_pub_time > self.arrival_timeout and self.has_arrived == 0
-        if current_time - self.state_start_time > 180:  # 总体超时保护
+        if current_time - self.state_start_time > 500:  # 总体超时保护
             rospy.logwarn("状态执行超时，可能需要人工干预")
         elif navigate_timeout:  # 导航超时保护
             self.has_arrived = 1
