@@ -114,6 +114,7 @@ class StateMachineNode:
         self.c_qr_data = []  # C区蔬菜列表
         self.qr_data = ""
         self.c_number_sequence = ""  # C区数字序列
+        self.c_expected_fruits = [] # C区水果序列
 
         # 视觉数据
         self.fruit_point = None
@@ -455,6 +456,8 @@ class StateMachineNode:
     def handle_c_plan_tasks(self):
         """规划C区任务"""
         self.c_task_list, self.c_obs_list = self.replan_c_task(self.c_number_sequence)
+        # 新增：生成期望水果序列
+        self.generate_c_expected_fruits()
         self.c_current_index = 0
         if len(self.c_task_list) > 0:
             self.area_c_state = AreaCState.NAVIGATE_TO_TARGET
@@ -550,12 +553,20 @@ class StateMachineNode:
             return False
 
         elif self.task_state == TaskState.EXECUTING_ACTION:
-            # 判断是否需要抓取
-            if self.should_grab_fruit():
-                rospy.loginfo("C区：满足抓取条件，开始抓取")
-                self.execute_grab_action()
+            # 获取当前期望的水果类型
+            expected_fruit = self.get_current_expected_fruit_c()
+            # 判断是否需要抓取：水果匹配且成熟
+            if expected_fruit and self.fruit_class == expected_fruit:
+                rospy.loginfo(f"C区：水果匹配成功 {self.fruit_class} == {expected_fruit}")
+                if self.should_grab_fruit():
+                    rospy.loginfo("C区：水果匹配且成熟，开始抓取")
+                    self.execute_grab_action()
+                else:
+                    rospy.loginfo("C区：水果匹配但未成熟，不抓取")
+                    self.arm_pub.publish("观测位:0;")
+                    rospy.sleep(1)
             else:
-                rospy.loginfo("C区：不满足抓取条件")
+                rospy.loginfo(f"C区：水果不匹配 {self.fruit_class} != {expected_fruit}，不抓取")
                 self.arm_pub.publish("观测位:0;")
                 rospy.sleep(1)
 
@@ -568,6 +579,46 @@ class StateMachineNode:
             return True
 
         return False
+
+    # ===================================C区新增两个辅助函数=============================================
+    def generate_c_expected_fruits(self):
+        """根据C区数字序列生成期望水果序列"""
+        self.c_expected_fruits = []
+        positions = [int(x.strip()) for x in self.c_number_sequence.split(',')]
+
+        for pos in positions:
+            if 1 <= pos <= len(self.c_qr_data):
+                fruit_chinese = self.c_qr_data[pos - 1]  # 位置从1开始，数组从0开始
+                if fruit_chinese in self.fruit_chinese_to_english:
+                    fruit_english = self.fruit_chinese_to_english[fruit_chinese]
+                    self.c_expected_fruits.append(fruit_english)
+                else:
+                    self.c_expected_fruits.append(None)  # 无法识别的水果
+            else:
+                self.c_expected_fruits.append(None)  # 位置越界
+
+        rospy.loginfo(f"C区期望水果序列: {self.c_expected_fruits}")
+
+    def get_current_expected_fruit_c(self):
+        """获取当前C区任务期望的水果类型"""
+        # 计算当前正在执行的任务索引
+        completed_tasks = len(self.c_task_list) - len([t for t in self.c_task_list if t != 0])  # 非0任务数
+        current_fruit_index = 0
+
+        # 遍历任务列表，找到当前执行的水果任务索引
+        task_count = 0
+        for i, (task, obs) in enumerate(zip(self.c_task_list, self.c_obs_list)):
+            if obs != 0:  # 只有观测位不为0的才是真正的抓取任务
+                if task_count == completed_tasks:
+                    current_fruit_index = task_count
+                    break
+                task_count += 1
+
+        # 返回期望的水果
+        if 0 <= current_fruit_index < len(self.c_expected_fruits):
+            return self.c_expected_fruits[current_fruit_index]
+        return None
+    # =====================================================================================
 
     def handle_c_move_to_next(self):
         """C区移动到下一个目标"""
@@ -600,20 +651,23 @@ class StateMachineNode:
 
         if self.has_arrived:
             rospy.loginfo("C区：到达倾倒点，开始倾倒")
-            # self.arm_pub.publish("动作组:10;")  # dump fruit cmd
+            self.arm_pub.publish("收集区:0;")  # dump fruit cmd
             rospy.sleep(3)  # 等待倾倒完成
+            self.arm_pub.publish("收集区:1;")
             self.task_state = TaskState.WAITING_FOR_ARRIVAL  # 重置状态
             self._dump_waypoint_set = False  # 重置标志
             self.area_c_state = AreaCState.RETURN_TO_START
+            self.set_waypoint(22)
 
     def handle_c_return(self):
         """C区返回起始点"""
-        if self.task_state == TaskState.WAITING_FOR_ARRIVAL or not hasattr(self, '_return_waypoint_set'):
-            self.set_waypoint(21)
-            self._return_waypoint_set = True
-            rospy.loginfo("C区：返回起始点")
+        if self.task_state == TaskState.WAITING_FOR_ARRIVAL and self.current_waypoint_id == 22:
+            if self.has_arrived:
+                self.set_waypoint(21)
+                self._return_waypoint_set = True
+                rospy.loginfo("C区：返回起始点")
 
-        if self.has_arrived:
+        if self.has_arrived and self.current_waypoint_id == 21:
             rospy.loginfo("C区：已返回起始点")
             self._return_waypoint_set = False  # 重置标志
             self.area_c_state = AreaCState.COMPLETED
@@ -878,23 +932,23 @@ class StateMachineNode:
             # A区播报成熟度
             ripeness_id = 19 if self.fruit_ripeness else 18
             self.arm_pub.publish(f"语音:{ripeness_id};")
-            rospy.loginfo("语音播报成熟度为{ripeness_id}")
+            rospy.loginfo(f"语音播报成熟度为{ripeness_id}")
         elif self.system_state == SystemState.AREA_B:
             # B区播报类别
             if self.fruit_class in self.fruit_class_to_voice_id:
                 class_id = self.fruit_class_to_voice_id[self.fruit_class]
                 self.arm_pub.publish(f"语音:{class_id};")
-                rospy.loginfo("语音播报类别为{class_id}")
+                rospy.loginfo(f"语音播报类别为{class_id}")
         elif self.system_state == SystemState.AREA_C:
             # C区播报类别和成熟度
             if self.fruit_class in self.fruit_class_to_voice_id:
                 class_id = self.fruit_class_to_voice_id[self.fruit_class]
                 ripeness_id = 19 if self.fruit_ripeness else 18
                 self.arm_pub.publish(f"语音:{class_id};")
-                rospy.loginfo("C区语音播报类别为{class_id}")
-                rospy.sleep(1)
+                rospy.loginfo(f"C区语音播报类别为{class_id}")
+                rospy.sleep(0.5)
                 self.arm_pub.publish(f"语音:{ripeness_id};")
-                rospy.loginfo("C区语音播报成熟度为{ripeness_id}")
+                rospy.loginfo(f"C区语音播报成熟度为{ripeness_id}")
 
     def check_timeouts(self):
         """检查各种超时"""
@@ -956,7 +1010,7 @@ class StateMachineNode:
                 return 0
         return 0
 
-    def replan_c_task(position_str):
+    def replan_c_task(self, position_str):
         """
         将位置编号字符串转换为对应的点位顺序和观察状态
 
