@@ -145,6 +145,7 @@ class StateMachineNode:
         self.c_task_list = []
         self.c_current_index = 0
         self.c_obs_list = []  # 观测位模式
+        self.c_expected_fruit = []
 
         # 线程锁
         self.data_lock = threading.Lock()
@@ -455,22 +456,12 @@ class StateMachineNode:
 
     def handle_c_plan_tasks(self):
         """规划C区任务（修正版）"""
-        # 保存原始数字序列
-        self.original_number_sequence = [int(x.strip()) for x in self.c_number_sequence.split(',')]
+        # 规划任务（现在返回三个列表）
+        self.c_task_list, self.c_obs_list, self.c_fruit_list = self.replan_c_task(self.c_number_sequence)
 
-        # 规划任务
-        self.c_task_list, self.c_obs_list = self.replan_c_task(self.c_number_sequence)
-
-        # 创建原始任务顺序列表（仅包含抓取任务）
-        self.original_task_order = []
-        for i, obs in enumerate(self.c_obs_list):
-            if obs != 0:  # 只记录抓取任务
-                self.original_task_order.append(i)
-
-        # 生成期望水果序列
-        self.generate_c_expected_fruits()
         # 重置当前索引
         self.c_current_index = 0
+
         if len(self.c_task_list) > 0:
             self.area_c_state = AreaCState.NAVIGATE_TO_TARGET
         else:
@@ -497,38 +488,27 @@ class StateMachineNode:
             self.area_c_state = AreaCState.EXECUTE_GRAB
 
     def handle_c_execute_grab(self):
-        """C区执行抓取"""
-        # 获取当前任务的观测位模式
-        if len(self.c_obs_list) == 0:
-            rospy.logwarn("C区：观测位列表为空")
-            self.task_state = TaskState.WAITING_FOR_ARRIVAL  # 重置状态
-            self.area_c_state = AreaCState.MOVE_TO_NEXT_TARGET
-            return
+        """C区执行抓取（修正版）"""
+        # 获取当前任务的观测位模式和期望水果
+        obs_mode = self.c_obs_list[0] if self.c_obs_list else 0
+        self.c_expected_fruit = self.c_fruit_list[0] if self.c_fruit_list else None
 
-        obs_mode = self.c_obs_list[0]
-
-        # 如果观测位为0，说明是中间点位，直接跳过
+        # 如果是中间点位，直接跳过
         if obs_mode == 0:
             rospy.loginfo("C区：中间点位，跳过观测")
             self.arm_pub.publish("观测位:0;")
             rospy.sleep(1)
-            self.task_state = TaskState.WAITING_FOR_ARRIVAL  # 重置状态
+            self.task_state = TaskState.WAITING_FOR_ARRIVAL
             self.area_c_state = AreaCState.MOVE_TO_NEXT_TARGET
             return
 
-        # 初始化观测抓取流程（确保从正确状态开始）
-        if self.task_state == TaskState.COMPLETED:
-            self.task_state = TaskState.WAITING_FOR_ARRIVAL
-            rospy.loginfo("C区：重置任务状态为WAITING_FOR_ARRIVAL")
-
         # 执行C区专用的观测+抓取流程
-        success = self.execute_c_observation_and_grab(obs_mode)
+        success = self.execute_c_observation_and_grab(obs_mode, self.c_expected_fruit)
 
         if success:
-            # 观测和抓取都完成，进入下一个目标
             self.area_c_state = AreaCState.MOVE_TO_NEXT_TARGET
 
-    def execute_c_observation_and_grab(self, observation_pos):
+    def execute_c_observation_and_grab(self, observation_pos, expected_fruit):
         """C区专用的观测+抓取流程，不会重置task_state为WAITING_FOR_ARRIVAL"""
         rospy.loginfo(f"[C区观测抓取] task_state = {self.task_state}")
 
@@ -565,9 +545,6 @@ class StateMachineNode:
             return False
 
         elif self.task_state == TaskState.EXECUTING_ACTION:
-            # 获取当前期望的水果类型
-            expected_fruit = self.get_current_expected_fruit_c()
-            # 判断是否需要抓取：水果匹配且成熟
             if expected_fruit and self.fruit_class == expected_fruit:
                 rospy.loginfo(f"C区：水果匹配成功 {self.fruit_class} == {expected_fruit}")
                 if self.should_grab_fruit():
@@ -592,56 +569,15 @@ class StateMachineNode:
 
         return False
 
-    # ===================================C区新增两个辅助函数=============================================
-    def generate_c_expected_fruits(self):
-        """根据C区数字序列生成期望水果序列"""
-        self.c_expected_fruits = []
-        positions = [int(x.strip()) for x in self.c_number_sequence.split(',')]
-
-        for pos in positions:
-            if 1 <= pos <= len(self.c_qr_data):
-                fruit_chinese = self.c_qr_data[pos - 1]  # 位置从1开始，数组从0开始
-                if fruit_chinese in self.fruit_chinese_to_english:
-                    fruit_english = self.fruit_chinese_to_english[fruit_chinese]
-                    self.c_expected_fruits.append(fruit_english)
-                else:
-                    self.c_expected_fruits.append(None)  # 无法识别的水果
-            else:
-                self.c_expected_fruits.append(None)  # 位置越界
-
-        rospy.loginfo(f"C区期望水果序列: {self.c_expected_fruits}")
-
-    def get_current_expected_fruit_c(self):
-        """获取当前C区任务期望的水果类型（修正版）"""
-        # 计算当前是第几个抓取任务
-        completed_tasks = len(self.original_task_order) - len(self.original_task_order)
-        current_fruit_index = completed_tasks
-
-        # 获取原始序列中的位置索引
-        if current_fruit_index < len(self.original_number_sequence):
-            position = self.original_number_sequence[current_fruit_index]
-
-            # 获取该位置对应的水果
-            if 1 <= position <= len(self.c_qr_data):
-                fruit_chinese = self.c_qr_data[position - 1]
-                return self.fruit_chinese_to_english.get(fruit_chinese)
-
-        return None
-    # =====================================================================================
-
     def handle_c_move_to_next(self):
         """C区移动到下一个目标（修正版）"""
-        # 检查当前任务是否是抓取任务
-        if self.c_obs_list and self.c_obs_list[0] != 0:
-            # 如果是抓取任务，移除原始任务顺序中的第一个元素
-            if self.original_task_order:
-                self.original_task_order.pop(0)
-
         # 移除已完成的任务
         if self.c_task_list:
-            self.c_task_list.pop(0)
+            self.c_task_list = self.c_task_list[1:]
         if self.c_obs_list:
-            self.c_obs_list.pop(0)
+            self.c_obs_list = self.c_obs_list[1:]
+        if self.c_fruit_list:  # 新增：移除期望水果
+            self.c_fruit_list = self.c_fruit_list[1:]
 
         # 重置任务状态
         self.task_state = TaskState.WAITING_FOR_ARRIVAL
@@ -650,6 +586,7 @@ class StateMachineNode:
         if self.c_task_list:
             self.area_c_state = AreaCState.NAVIGATE_TO_TARGET
         else:
+            rospy.loginfo("C区：所有抓取任务完成，准备倾倒")
             self.area_c_state = AreaCState.DUMP_FRUITS
 
     def handle_c_dump_fruits(self):
@@ -1016,19 +953,16 @@ class StateMachineNode:
 
     def replan_c_task(self, position_str):
         """
-        将位置编号字符串转换为对应的点位顺序和观察状态
+        将位置编号字符串转换为对应的点位顺序、观察状态和期望水果
 
         参数:
         position_str: 位置编号字符串，如 "1,6,10,3,2,5,7,8"
 
         返回:
-        tuple: (点位顺序列表, 观察状态列表)
-        观察状态说明:
-        - 0: 目标点位为20,21时
-        - 1: 目标位置为1-4时，或目标位置为5-8且点位在32-35之间时
-        - 2: 目标位置为9-12时，或目标位置为5-8且点位在24-27之间时
+        tuple: (点位顺序列表, 观察状态列表, 期望水果列表)
         """
         # 解析输入字符串
+        global last_target
         positions = [int(x.strip()) for x in position_str.split(',')]
 
         # 基本映射规则
@@ -1047,7 +981,16 @@ class StateMachineNode:
 
         result = []
         obs_result = []
-        last_target = None
+        fruit_result = []  # 新增：期望水果列表
+
+        # === 新增：准备水果映射 ===
+        # 将中文水果名转换为英文
+        fruit_mapping = {}
+        for i, fruit_chinese in enumerate(self.c_qr_data):
+            if fruit_chinese in self.fruit_chinese_to_english:
+                fruit_mapping[i + 1] = self.fruit_chinese_to_english[fruit_chinese]
+
+        # =======================
 
         def get_current_obs(position, point):
             """根据位置和点位计算观察状态"""
@@ -1087,18 +1030,22 @@ class StateMachineNode:
                         # 后续目标在1-4，第一个目标映射到24-27，前置为20,37
                         result.extend([20, 37])
                         obs_result.extend([0, 0])
+                        fruit_result.extend([None, None])  # 新增：中间点无期望水果
                     elif 9 <= decisive_target <= 12:
                         # 后续目标在9-12，第一个目标映射到32-35，前置为20,21
                         result.extend([20, 21])
                         obs_result.extend([0, 0])
+                        fruit_result.extend([None, None])  # 新增
                     else:
                         # 其他情况，默认处理
                         result.extend([20, 21])
                         obs_result.extend([0, 0])
+                        fruit_result.extend([None, None])  # 新增
                 else:
                     # 所有目标都在5-8范围内，默认处理
                     result.extend([20, 21])
                     obs_result.extend([0, 0])
+                    fruit_result.extend([None, None])  # 新增
 
             # 原有的前置逻辑处理其他情况
             elif len(positions) >= 2:
@@ -1108,33 +1055,43 @@ class StateMachineNode:
                 if 1 <= first_pos <= 8 and 1 <= second_pos <= 8:
                     result.extend([20, 37])
                     obs_result.extend([0, 0])
+                    fruit_result.extend([None, None])  # 新增
                 # 如果第一个在5-12之间且第二个在9-12之间
                 elif 5 <= first_pos <= 12 and 9 <= second_pos <= 12:
                     result.extend([20, 21])
                     obs_result.extend([0, 0])
+                    fruit_result.extend([None, None])  # 新增
                 # 其他情况保持原逻辑
                 elif first_pos in [1, 2, 3, 4]:
                     result.extend([21, 37])
                     obs_result.extend([0, 0])
+                    fruit_result.extend([None, None])  # 新增
                 else:
                     result.extend([20, 21])
                     obs_result.extend([0, 0])
+                    fruit_result.extend([None, None])  # 新增
             else:
                 # 如果位置数量少于2个，保持原逻辑
                 if first_pos in [1, 2, 3, 4]:
                     result.extend([21, 37])
                     obs_result.extend([0, 0])
+                    fruit_result.extend([None, None])  # 新增
                 else:
                     result.extend([20, 21])
                     obs_result.extend([0, 0])
+                    fruit_result.extend([None, None])  # 新增
 
         # 处理每个位置的点位映射
         for i, pos in enumerate(positions):
             current_target = None
+            expected_fruit = None  # 新增：期望水果
 
             # 处理基本映射
             if pos in basic_mapping:
                 current_target = basic_mapping[pos]
+                # 新增：设置期望水果
+                if pos in fruit_mapping:
+                    expected_fruit = fruit_mapping[pos]
 
             # 处理模糊位置
             elif pos in ambiguous_mapping:
@@ -1173,31 +1130,37 @@ class StateMachineNode:
                         # 其他情况默认选择第一组
                         current_target = option1
 
+                # 新增：设置期望水果
+                if pos in fruit_mapping:
+                    expected_fruit = fruit_mapping[pos]
+
             # 检查是否需要添加中间点位
             if last_target is not None and current_target is not None:
                 # 从24-27前往32-35
                 if 24 <= last_target <= 27 and 32 <= current_target <= 35:
                     result.extend([37, 21])
                     obs_result.extend([0, 0])  # 中间点位都是观察状态0
+                    fruit_result.extend([None, None])  # 新增：中间点无期望水果
                 # 从32-35前往24-27
                 elif 32 <= last_target <= 35 and 24 <= current_target <= 27:
                     result.extend([21, 37])
                     obs_result.extend([0, 0])  # 中间点位都是观察状态0
+                    fruit_result.extend([None, None])  # 新增
 
-            # 添加当前目标点位和对应的观察状态
+            # 添加当前目标点位、对应的观察状态和期望水果
             if current_target is not None:
                 result.append(current_target)
                 obs_result.append(get_current_obs(pos, current_target))
+                fruit_result.append(expected_fruit)  # 新增
                 last_target = current_target
 
         # 结尾处理逻辑
         if result and 24 <= result[-1] <= 27:
             result.append(23)
             obs_result.append(0)
-        # 如果最后一个在32-35之间，不添加任何点位
+            fruit_result.append(None)  # 新增
 
-        return result, obs_result
-
+        return result, obs_result, fruit_result
 
 def main():
     try:
