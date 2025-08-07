@@ -454,10 +454,22 @@ class StateMachineNode:
                 self.area_c_state = AreaCState.PLAN_TASKS
 
     def handle_c_plan_tasks(self):
-        """规划C区任务"""
+        """规划C区任务（修正版）"""
+        # 保存原始数字序列
+        self.original_number_sequence = [int(x.strip()) for x in self.c_number_sequence.split(',')]
+
+        # 规划任务
         self.c_task_list, self.c_obs_list = self.replan_c_task(self.c_number_sequence)
-        # 新增：生成期望水果序列
+
+        # 创建原始任务顺序列表（仅包含抓取任务）
+        self.original_task_order = []
+        for i, obs in enumerate(self.c_obs_list):
+            if obs != 0:  # 只记录抓取任务
+                self.original_task_order.append(i)
+
+        # 生成期望水果序列
         self.generate_c_expected_fruits()
+        # 重置当前索引
         self.c_current_index = 0
         if len(self.c_task_list) > 0:
             self.area_c_state = AreaCState.NAVIGATE_TO_TARGET
@@ -600,46 +612,44 @@ class StateMachineNode:
         rospy.loginfo(f"C区期望水果序列: {self.c_expected_fruits}")
 
     def get_current_expected_fruit_c(self):
-        """获取当前C区任务期望的水果类型"""
-        # 计算当前正在执行的任务索引
-        completed_tasks = len(self.c_task_list) - len([t for t in self.c_task_list if t != 0])  # 非0任务数
-        current_fruit_index = 0
+        """获取当前C区任务期望的水果类型（修正版）"""
+        # 计算当前是第几个抓取任务
+        completed_tasks = len(self.original_task_order) - len(self.original_task_order)
+        current_fruit_index = completed_tasks
 
-        # 遍历任务列表，找到当前执行的水果任务索引
-        task_count = 0
-        for i, (task, obs) in enumerate(zip(self.c_task_list, self.c_obs_list)):
-            if obs != 0:  # 只有观测位不为0的才是真正的抓取任务
-                if task_count == completed_tasks:
-                    current_fruit_index = task_count
-                    break
-                task_count += 1
+        # 获取原始序列中的位置索引
+        if current_fruit_index < len(self.original_number_sequence):
+            position = self.original_number_sequence[current_fruit_index]
 
-        # 返回期望的水果
-        if 0 <= current_fruit_index < len(self.c_expected_fruits):
-            return self.c_expected_fruits[current_fruit_index]
+            # 获取该位置对应的水果
+            if 1 <= position <= len(self.c_qr_data):
+                fruit_chinese = self.c_qr_data[position - 1]
+                return self.fruit_chinese_to_english.get(fruit_chinese)
+
         return None
     # =====================================================================================
 
     def handle_c_move_to_next(self):
-        """C区移动到下一个目标"""
+        """C区移动到下一个目标（修正版）"""
+        # 检查当前任务是否是抓取任务
+        if self.c_obs_list and self.c_obs_list[0] != 0:
+            # 如果是抓取任务，移除原始任务顺序中的第一个元素
+            if self.original_task_order:
+                self.original_task_order.pop(0)
+
         # 移除已完成的任务
-        if len(self.c_task_list) > 0:
-            self.c_task_list = self.c_task_list[1:]  # 移除第一个元素
-        if len(self.c_obs_list) > 0:
-            self.c_obs_list = self.c_obs_list[1:]  # 移除第一个元素
+        if self.c_task_list:
+            self.c_task_list.pop(0)
+        if self.c_obs_list:
+            self.c_obs_list.pop(0)
 
-        rospy.loginfo(f"C区：剩余任务数量 {len(self.c_task_list)}")
-
-        # 重置任务状态为等待到达
+        # 重置任务状态
         self.task_state = TaskState.WAITING_FOR_ARRIVAL
 
         # 检查是否还有任务
-        if len(self.c_task_list) > 0:
-            # 有下一个任务，回到导航状态
+        if self.c_task_list:
             self.area_c_state = AreaCState.NAVIGATE_TO_TARGET
         else:
-            # 所有任务完成，进入倾倒阶段
-            rospy.loginfo("C区：所有抓取任务完成，准备倾倒")
             self.area_c_state = AreaCState.DUMP_FRUITS
 
     def handle_c_dump_fruits(self):
