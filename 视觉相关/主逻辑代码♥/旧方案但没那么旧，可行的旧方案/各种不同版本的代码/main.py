@@ -770,6 +770,10 @@ class StateMachineNode:
             else:
                 pass
             z = self.fruit_point.z * 100
+            if self.fruit_class == "pear":
+                z = z - 4
+            else:
+                pass
             phi = self.fruit_point.y
             rospy.loginfo(f"{r},{z},{phi}")
             self.arm_pub.publish(f"机械臂:{r},{z},{phi};")
