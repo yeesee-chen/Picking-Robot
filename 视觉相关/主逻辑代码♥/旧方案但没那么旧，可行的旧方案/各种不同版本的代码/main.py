@@ -146,6 +146,7 @@ class StateMachineNode:
         self.c_current_index = 0
         self.c_obs_list = []  # 观测位模式
         self.c_expected_fruit = []
+        self.last_target = None
 
         # 线程锁
         self.data_lock = threading.Lock()
@@ -962,9 +963,8 @@ class StateMachineNode:
         tuple: (点位顺序列表, 观察状态列表, 期望水果列表)
         """
         # 解析输入字符串
-        global last_target
         positions = [int(x.strip()) for x in position_str.split(',')]
-
+        last_target = self.last_target
         # 基本映射规则
         basic_mapping = {
             1: 24, 2: 25, 3: 26, 4: 27,
@@ -1160,6 +1160,7 @@ class StateMachineNode:
             obs_result.append(0)
             fruit_result.append(None)  # 新增
 
+        self.last_target = last_target
         return result, obs_result, fruit_result
 
 def main():
