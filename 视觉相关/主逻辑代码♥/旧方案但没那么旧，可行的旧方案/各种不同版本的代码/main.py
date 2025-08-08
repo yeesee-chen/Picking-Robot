@@ -492,7 +492,7 @@ class StateMachineNode:
         """C区执行抓取（修正版）"""
         # 获取当前任务的观测位模式和期望水果
         obs_mode = self.c_obs_list[0] if self.c_obs_list else 0
-        self.c_expected_fruit = self.c_fruit_list[0] if self.c_fruit_list else None
+        expected_fruit = self.c_expected_fruit[0]
 
         # 如果是中间点位，直接跳过
         if obs_mode == 0:
@@ -504,7 +504,7 @@ class StateMachineNode:
             return
 
         # 执行C区专用的观测+抓取流程
-        success = self.execute_c_observation_and_grab(obs_mode, self.c_expected_fruit)
+        success = self.execute_c_observation_and_grab(obs_mode, expected_fruit)
 
         if success:
             self.area_c_state = AreaCState.MOVE_TO_NEXT_TARGET
@@ -561,6 +561,7 @@ class StateMachineNode:
                 rospy.sleep(1)
 
             self.task_state = TaskState.COMPLETED
+            self.c_expected_fruit = self.c_expected_fruit[1:]
             return True  # 直接返回True，表示整个流程完成
 
         elif self.task_state == TaskState.COMPLETED:
@@ -577,8 +578,6 @@ class StateMachineNode:
             self.c_task_list = self.c_task_list[1:]
         if self.c_obs_list:
             self.c_obs_list = self.c_obs_list[1:]
-        if self.c_fruit_list:  # 新增：移除期望水果
-            self.c_fruit_list = self.c_fruit_list[1:]
 
         # 重置任务状态
         self.task_state = TaskState.WAITING_FOR_ARRIVAL
@@ -924,6 +923,9 @@ class StateMachineNode:
         lines = [line.strip() for line in qr_data.split('\n') if line.strip()]
         if len(lines) >= 9:
             self.c_qr_data = lines[:8]
+            for fruit in self.c_qr_data:
+                if fruit in self.fruit_chinese_to_english:
+                    self.c_expected_fruit.append(self.fruit_chinese_to_english[fruit])
             self.c_number_sequence = lines[-1]
         rospy.loginfo(f"C区二维码解析完成: 蔬菜{len(self.c_qr_data)}个, 序列: {self.c_number_sequence}")
 
